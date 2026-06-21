@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IAM Academy | Denise Banks</title>
-  <link rel="icon" type="image/x-icon" href="favicon.svg">
+<title>IAM Academy by Denise — Learn Identity & Access Engineering</title>
 <style>
   /* ============ DESIGN SYSTEM ============
      Identity: an enterprise security console you learn inside of.
@@ -291,6 +290,10 @@
   .about-linkedin{margin-top:16px !important;color:var(--ink) !important}
   .about-linkedin a{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-size:13px;color:var(--cyan);text-decoration:none;border:1px solid #0e6b7e;background:var(--cyan-deep);padding:8px 14px;border-radius:9px;transition:.15s}
   .about-linkedin a:hover{background:#0c3a44;border-color:var(--cyan)}
+  /* code blocks (Module 12 automation lessons) */
+  .codeblock{margin:14px 0;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#0a0e14}
+  .cb-label{font-family:var(--mono);font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--cyan);background:var(--cyan-deep);padding:6px 13px;border-bottom:1px solid var(--line)}
+  .codeblock pre{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12px;line-height:1.65;color:var(--ink);overflow-x:auto;white-space:pre}
   .about-actions{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap}
   @media (max-width:680px){.about-card{flex-direction:column;gap:14px}.about-h1{font-size:27px}}
 
@@ -899,6 +902,174 @@ if(typeof module!=='undefined'&&module.exports){
   A('assertion unsigned flagged', inspectAssertion({...good,signed:false},ctx).valid===false);
   A('assertion no attrs flagged', inspectAssertion({...good,attributes:{}},ctx).valid===false);
   console.log('engines4 tests done');
+}
+
+/* =====================================================================
+   ENGINES — Part 5 (automation, auth deep-dive, CyberArk components,
+   access-risk review, OIG). Vendor behavior reflected here was verified
+   against Okta and Microsoft documentation.
+   ===================================================================== */
+
+/* ---- REST request evaluator (Module 12) ----
+   Given an intended IAM operation, check the learner picked the right HTTP
+   method + path shape + expected status. Mirrors real Okta/Graph REST. */
+function evalRestRequest(spec, pick){
+  // spec: {goal, method, expectStatus} ; pick: {method, status}
+  const methodOk = pick.method===spec.method;
+  const statusOk = String(pick.status)===String(spec.expectStatus);
+  return {ok: methodOk&&statusOk, methodOk, statusOk,
+    why: methodOk?(statusOk?'Correct method and expected status.':'Right method, but that status code doesn\u2019t match the outcome.')
+                 :'Wrong HTTP method for this operation.'};
+}
+
+/* ---- Script step-ordering checker (Module 12) ----
+   Learner orders the steps of a PowerShell/Graph or Python automation; we
+   check the sequence matches the correct pipeline. */
+function checkScriptOrder(order, solution){
+  const ok = order.length===solution.length && order.every((s,i)=>s===solution[i]);
+  let firstWrong=-1;
+  for(let i=0;i<Math.min(order.length,solution.length);i++){ if(order[i]!==solution[i]){firstWrong=i;break;} }
+  return {ok, firstWrong};
+}
+
+/* ---- MFA factor strength (Module 13) ----
+   Classify authenticators as phishing-resistant or not, and score an MFA combo. */
+const FACTOR_INFO = {
+  'password':        {label:'Password',                possession:false, phishResistant:false, strength:0},
+  'sms':             {label:'SMS OTP',                 possession:true,  phishResistant:false, strength:1},
+  'totp':            {label:'TOTP authenticator app',  possession:true,  phishResistant:false, strength:2},
+  'push':            {label:'Push notification',       possession:true,  phishResistant:false, strength:2},
+  'push_number':     {label:'Push w/ number matching', possession:true,  phishResistant:false, strength:3},
+  'fido2':           {label:'FIDO2 / WebAuthn passkey',possession:true,  phishResistant:true,  strength:5},
+  'piv':             {label:'PIV / smart card (cert)', possession:true,  phishResistant:true,  strength:5},
+  'okta_verify_fastpass':{label:'Okta FastPass',       possession:true,  phishResistant:true,  strength:5}
+};
+function assessMfa(factors){
+  // factors: array of keys; returns whether it's true MFA and phishing-resistant
+  const known = factors.map(f=>FACTOR_INFO[f]).filter(Boolean);
+  const hasKnowledge = factors.includes('password');
+  const hasPossession = known.some(f=>f.possession);
+  const isMfa = known.length>=2 && hasKnowledge && hasPossession || (known.filter(f=>f.possession).length>=1 && known.length>=2);
+  const phishResistant = known.some(f=>f.phishResistant);
+  const maxStrength = known.reduce((m,f)=>Math.max(m,f.strength),0);
+  return {isMfa: known.length>=2, phishResistant, maxStrength,
+    note: phishResistant?'Includes a phishing-resistant factor (FIDO2/PIV/FastPass) \u2014 strongest tier.'
+                        :'No phishing-resistant factor; OTP/push can be phished or fatigued.'};
+}
+
+/* ---- Certificate-based auth chain validation (Module 13) ----
+   Validate a client certificate presented for authentication. */
+function validateCert(cert, ctx){
+  // cert: {subject, issuer, notBefore, notOnOrAfter, revoked, keyUsageClientAuth, chainsToTrustedCA}
+  // ctx: {now, trustedCAs:[...]}
+  const checks=[];
+  const push=(l,ok,d)=>checks.push({label:l,ok,detail:d});
+  push('Chains to a trusted CA', !!cert.chainsToTrustedCA && ctx.trustedCAs.includes(cert.issuer),
+    cert.chainsToTrustedCA?('issued by '+cert.issuer):'issuer not in trust store \u2014 untrusted chain');
+  const timeOk = ctx.now>=cert.notBefore && ctx.now<cert.notOnOrAfter;
+  push('Within validity period', timeOk, timeOk?'not expired / not pre-dated':'outside notBefore\u2026notOnOrAfter');
+  push('Not revoked (CRL/OCSP)', !cert.revoked, cert.revoked?'certificate is revoked':'revocation check passed');
+  push('Has client-auth key usage', !!cert.keyUsageClientAuth, cert.keyUsageClientAuth?'EKU permits client authentication':'cert not valid for client auth');
+  push('Subject maps to an identity', !!cert.subject, cert.subject?('binds to '+cert.subject):'no subject to map to a user');
+  const valid=checks.every(c=>c.ok);
+  return {valid, checks, verdict: valid?'Certificate accepted \u2014 strong, phishing-resistant authentication.':'Certificate rejected \u2014 one or more validation checks failed.'};
+}
+
+/* ---- Okta Device Assurance evaluation (Module 13) ----
+   Given a device's posture and a Device Assurance policy, allow/deny. */
+function evalDeviceAssurance(policy, device){
+  // policy: {requireManaged, requireScreenLock, minOsVersion, requireDiskEncryption, requireBiometric}
+  // device: {managed, screenLock, osVersion, diskEncryption, biometric}
+  const fails=[];
+  if(policy.requireManaged && !device.managed) fails.push('device is not managed/registered (no MDM)');
+  if(policy.requireScreenLock && !device.screenLock) fails.push('screen lock not enabled');
+  if(policy.minOsVersion && device.osVersion < policy.minOsVersion) fails.push('OS version '+device.osVersion+' is below minimum '+policy.minOsVersion);
+  if(policy.requireDiskEncryption && !device.diskEncryption) fails.push('disk encryption is off');
+  if(policy.requireBiometric && !device.biometric) fails.push('biometric not configured');
+  return {allow: fails.length===0, fails,
+    verdict: fails.length===0?'Device meets assurance policy \u2014 access permitted.':'Device blocked by Device Assurance until posture is fixed.'};
+}
+
+/* ---- CyberArk component router (Module 07 strengthen) ----
+   Map an admin action to the CyberArk component responsible. */
+const CYBERARK_COMPONENTS = {
+  'vault':{label:'Digital Vault', role:'Encrypted storage of secrets/credentials (the hardened core).'},
+  'cpm':{label:'CPM (Central Policy Manager)', role:'Rotates & manages credentials per policy (change/verify/reconcile).'},
+  'psm':{label:'PSM (Privileged Session Manager)', role:'Proxies, isolates & records privileged sessions.'},
+  'pvwa':{label:'PVWA (Password Vault Web Access)', role:'The web UI where users request, check out & manage access.'}
+};
+function cyberArkComponentFor(actionKey){
+  return CYBERARK_COMPONENTS[actionKey]||null;
+}
+
+/* ---- Access-risk review (Module 06 strengthen) ----
+   Detect high-risk findings on an account during an access risk audit. */
+function assessAccessRisk(acct){
+  // acct: {lastLoginDays, status, terminatedInHR, isAdmin, mfaEnrolled, orphaned}
+  const findings=[];
+  if(acct.terminatedInHR && acct.status==='active') findings.push({sev:'critical', text:'Active account for an HR-terminated worker (missed termination).'});
+  if(acct.orphaned) findings.push({sev:'high', text:'Orphaned account \u2014 no matching identity/owner.'});
+  if(acct.lastLoginDays!=null && acct.lastLoginDays>90) findings.push({sev:'medium', text:'Dormant \u2014 no login in '+acct.lastLoginDays+' days.'});
+  if(acct.isAdmin && !acct.mfaEnrolled) findings.push({sev:'high', text:'Privileged account without MFA enrolled.'});
+  const worst = findings.reduce((w,f)=>{const rank={none:0,medium:1,high:2,critical:3};return rank[f.sev]>rank[w]?f.sev:w;},'none');
+  return {findings, risk: findings.length?worst:'none',
+    action: worst==='critical'?'Disable immediately and investigate.'
+          : worst==='high'?'Remediate now (enroll MFA / reassign / disable).'
+          : worst==='medium'?'Review for removal.'
+          : 'No action \u2014 account looks healthy.'};
+}
+
+/* ---- OIG access request workflow (Module 06 strengthen) ----
+   Okta Identity Governance access request -> approval decision. */
+function oigAccessRequest(policy, req){
+  // policy: {requiresApproval, approverRole, requiresJustification, autoExpiresDays, sodConflict}
+  // req: {justification, approved, requesterHasConflict}
+  const blockers=[];
+  if(policy.sodConflict && req.requesterHasConflict) blockers.push('Grant would create a Separation-of-Duties conflict \u2014 blocked pending exception.');
+  if(policy.requiresJustification && !(req.justification&&req.justification.trim())) blockers.push('Business justification required.');
+  if(policy.requiresApproval && !req.approved) blockers.push('Pending approval from '+(policy.approverRole||'approver')+'.');
+  if(blockers.length) return {granted:false, blockers};
+  return {granted:true, blockers:[],
+    note:'Access granted via OIG'+(policy.autoExpiresDays?(' \u2014 time-bound, auto-expires in '+policy.autoExpiresDays+' days and will surface in the next access certification.'):'.')};
+}
+
+/* ===== unit tests (node only) ===== */
+if(typeof module!=='undefined'&&module.exports){
+  const A=(n,c)=>console.log((c?'\u2713':'\u2717 FAIL')+' '+n);
+  // REST
+  A('REST create=POST 201', evalRestRequest({method:'POST',expectStatus:201},{method:'POST',status:201}).ok);
+  A('REST wrong method', !evalRestRequest({method:'POST',expectStatus:201},{method:'GET',status:200}).ok);
+  A('REST delete=DELETE 204', evalRestRequest({method:'DELETE',expectStatus:204},{method:'DELETE',status:204}).ok);
+  // order
+  A('script order ok', checkScriptOrder([1,2,3],[1,2,3]).ok);
+  A('script order wrong', !checkScriptOrder([1,3,2],[1,2,3]).ok);
+  // mfa
+  A('mfa fido2 phish-resistant', assessMfa(['password','fido2']).phishResistant);
+  A('mfa sms not phish-resistant', !assessMfa(['password','sms']).phishResistant);
+  // cert
+  const cctx={now:1000,trustedCAs:['Corp Issuing CA']};
+  const goodCert={subject:'amy@corp',issuer:'Corp Issuing CA',notBefore:0,notOnOrAfter:2000,revoked:false,keyUsageClientAuth:true,chainsToTrustedCA:true};
+  A('cert valid', validateCert(goodCert,cctx).valid);
+  A('cert revoked fails', !validateCert({...goodCert,revoked:true},cctx).valid);
+  A('cert untrusted issuer fails', !validateCert({...goodCert,issuer:'Sketchy CA'},cctx).valid);
+  // device assurance
+  const dap={requireManaged:true,requireScreenLock:true,minOsVersion:14,requireDiskEncryption:true};
+  A('device passes', evalDeviceAssurance(dap,{managed:true,screenLock:true,osVersion:15,diskEncryption:true}).allow);
+  A('device unmanaged blocked', !evalDeviceAssurance(dap,{managed:false,screenLock:true,osVersion:15,diskEncryption:true}).allow);
+  A('device old OS blocked', !evalDeviceAssurance(dap,{managed:true,screenLock:true,osVersion:12,diskEncryption:true}).allow);
+  // cyberark
+  A('cyberark CPM rotates', cyberArkComponentFor('cpm').label.includes('CPM'));
+  A('cyberark PSM records', /record|isolate|proxie/i.test(cyberArkComponentFor('psm').role));
+  // access risk
+  A('risk missed termination critical', assessAccessRisk({terminatedInHR:true,status:'active'}).risk==='critical');
+  A('risk dormant medium', assessAccessRisk({lastLoginDays:200,status:'active'}).risk==='medium');
+  A('risk admin no mfa high', assessAccessRisk({isAdmin:true,mfaEnrolled:false,status:'active'}).risk==='high');
+  A('risk healthy none', assessAccessRisk({lastLoginDays:3,status:'active',isAdmin:false}).risk==='none');
+  // oig
+  A('oig grant ok', oigAccessRequest({requiresApproval:true,requiresJustification:true},{justification:'need it',approved:true}).granted);
+  A('oig sod blocks', !oigAccessRequest({sodConflict:true},{requesterHasConflict:true}).granted);
+  A('oig pending approval blocks', !oigAccessRequest({requiresApproval:true,approverRole:'Mgr'},{approved:false}).granted);
+  console.log('engines5 tests done');
 }
 /* =====================================================================
    CURRICULUM — Track 1: Foundations of Identity & Access
@@ -2360,6 +2531,104 @@ ben needs remediation: remove sap:fi-display OR approvals:approve,
       {q:'Well-designed RBAC roles make governance:',
        o:['Harder','Easier — clean roles mean fewer outliers and simpler role-level fixes','Impossible','Slower'],a:1,
        e:'Governance and RBAC design reinforce each other: tight roles produce less drift and let you remediate at the role level instead of per person.'}
+    ]},
+  { id:'06.5', num:'06.5', title:'Access risk review: dormant, orphaned & missed terminations', minutes:10,
+    dek:'The proactive hunt for dangerous access hiding in AD and Okta: stale accounts, ownerless accounts, and leavers who never left. A core day-to-day IAM responsibility.',
+    concept:`<p>Certification campaigns (06.3) are scheduled and broad. <b>Access risk review</b> is the targeted, ongoing hunt for specific dangerous patterns in your directories \u2014 and it\u2019s a named responsibility on IAM job descriptions: "review and analyze Active Directory and Okta Universal Directory accounts to detect high-risk access, dormant accounts, and missed terminations."</p>
+    <div class="keyterm"><div class="kt-label">Core idea</div><div class="kt-term">Hunting for risky access</div>Rather than wait for a quarterly review, you continuously scan directory data for accounts that <i>shouldn\u2019t</i> look the way they do: still-active leavers, long-dormant logins, ownerless accounts, and privileged accounts without MFA. Each is a foothold an attacker would love.</div>
+    <h3>The high-risk patterns to detect</h3>
+    <ul>
+      <li><b>Missed terminations</b> \u2014 active accounts for workers HR shows as terminated. The single most dangerous finding: an ex-employee (or whoever took over their credentials) with live access. <span style="color:#22d3ee">Action: disable immediately.</span></li>
+      <li><b>Orphaned accounts</b> \u2014 accounts with no matching identity or owner (often the duplicate-identity problem from Module 10, or service accounts whose owner left). Nobody is accountable for them. <span style="color:#22d3ee">Action: reassign or disable.</span></li>
+      <li><b>Dormant accounts</b> \u2014 no sign-in for 90+ days. Unused access is pure risk with no benefit; it\u2019s a quiet target. <span style="color:#22d3ee">Action: review for removal.</span></li>
+      <li><b>Privileged without MFA</b> \u2014 an admin account not enrolled in MFA. High power, weak protection. <span style="color:#22d3ee">Action: remediate now.</span></li>
+    </ul>
+    <h3>Where the data comes from</h3>
+    <p>This is where your automation skills (Module 12) pay off: you pull account data from AD and Okta Universal Directory (often via PowerShell/Graph or the Okta API), reconcile against HR (the set-difference script from 12.3 finds missed terminations), and produce a findings list. The review is judgment; the data-gathering is scripting. Then you <b>document and track mitigating controls</b> \u2014 turning findings into evidence, the governance discipline from 06.3.</p>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>Severity drives speed:</b> not every finding is equal. A missed termination is <b>critical</b> \u2014 act in hours. An admin without MFA or an orphaned account is <b>high</b> \u2014 remediate now. A dormant account is <b>medium</b> \u2014 schedule for review. Triaging by severity is what separates a useful audit from an undifferentiated list nobody acts on.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the JD:</b> "detect high-risk access, dormant accounts, and missed terminations; document and track mitigating controls" is a verbatim responsibility. This lesson is that exact task. It\u2019s also where your governance background and new IAM/scripting skills visibly converge \u2014 a strong story to tell.</div></div>`,
+    example:`<p>A risk review over five directory accounts, each triaged by the pattern it matches and the severity that sets the response.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 triaging an access-risk review</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">access-risk \u00b7 AD + Okta UD scan</div><div class="chip">GOVERNANCE</div></div>
+    <div class="console-body"><div class="mono-out">account            signal                              \u2192 finding
+svc-legacy         no owner, HR has no match           \u2192 <span style="color:#f87171">HIGH: orphaned \u2014 reassign/disable</span>
+b.cole             HR=terminated, account still ACTIVE  \u2192 <span style="color:#f87171">CRITICAL: missed termination \u2014 disable now</span>
+a.rao              admin role, no MFA enrolled          \u2192 <span style="color:#f87171">HIGH: privileged w/o MFA \u2014 enroll/disable</span>
+j.kim              last login 210 days ago             \u2192 <span style="color:#fbbf24">MEDIUM: dormant \u2014 review for removal</span>
+d.osei             active, login 2d, MFA on             \u2192 <span style="color:#34d399">OK: healthy \u2014 keep</span>
+
+triage by severity: critical in hours, high now, medium scheduled</div></div></div>
+    <p>Five accounts, four distinct risk patterns, one healthy. Notice the critical missed-termination jumps the queue. In the lab you\u2019ll run this audit yourself, tagging each account keep / review / remediate by its risk.</p></div>`,
+    lab:{ kind:'accessrisk', id:'06.5',
+      title:'Run an access-risk audit',
+      objective:'Audit these AD / Okta Universal Directory accounts. Tag each: <b>Keep</b> (healthy), <b>Review</b> (dormant, medium risk), or <b>Remediate</b> (high/critical \u2014 missed termination, orphaned, or privileged-without-MFA). All correct to pass.',
+      intro:'',
+      accounts:[
+        {name:'b.cole', terminatedInHR:true, status:'active', isAdmin:false, lastLoginDays:5},
+        {name:'svc-legacy', orphaned:true, status:'active', isAdmin:false},
+        {name:'a.rao', isAdmin:true, mfaEnrolled:false, status:'active', lastLoginDays:3},
+        {name:'j.kim', status:'active', isAdmin:false, lastLoginDays:210},
+        {name:'d.osei', status:'active', isAdmin:false, lastLoginDays:2},
+        {name:'p.singh', status:'active', isAdmin:true, mfaEnrolled:true, lastLoginDays:1}
+      ]},
+    quiz:[
+      {q:'The most severe (critical) access-risk finding is:',
+       o:['A dormant account','An active account for an HR-terminated worker (missed termination)','A user with a long name','An account with MFA'],a:1,
+       e:'A still-active leaver is the most dangerous \u2014 live access for someone who should have none. Disable immediately.'},
+      {q:'An "orphaned" account is one that:',
+       o:['Has too much access','Has no matching identity or accountable owner','Was just created','Uses SMS MFA'],a:1,
+       e:'Orphaned accounts (no owner/identity match) have nobody accountable for them and should be reassigned or disabled.'},
+      {q:'A privileged (admin) account not enrolled in MFA should be rated:',
+       o:['Low \u2014 ignore it','High \u2014 remediate now (enroll MFA or disable)','It\u2019s fine','Critical only on weekends'],a:1,
+       e:'High power with weak protection is a high-severity finding; enroll MFA immediately or disable the account.'},
+      {q:'Triaging findings by severity matters because:',
+       o:['It looks tidy','It tells you what to fix in hours vs. now vs. on a schedule \u2014 turning a list into action','It\u2019s required by law','It speeds logins'],a:1,
+       e:'Severity drives response time: critical (missed termination) in hours, high now, medium scheduled \u2014 so the dangerous items aren\u2019t lost in noise.'}
+    ]},
+  { id:'06.6', num:'06.6', title:'Okta Identity Governance (OIG) in practice', minutes:9,
+    dek:'Governance as a product: access requests, approvals, and certification campaigns inside Okta. The named tool on Okta governance job descriptions.',
+    concept:`<p>Module 06 taught governance concepts and Module 09 showed Entra\u2019s Access Reviews. <b>Okta Identity Governance (OIG)</b> is Okta\u2019s governance product \u2014 explicitly named in job descriptions ("support user access governance activities using Okta Identity Governance"). It brings access requests, approvals, and certifications into the Okta platform you already know.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Okta Identity Governance (OIG)</div>Okta\u2019s governance layer, adding <b>Access Requests</b> (self-service requests routed for approval), <b>Access Certifications</b> (periodic review campaigns), and governance reporting on top of Okta\u2019s lifecycle and directory. It turns ad-hoc "email your manager for access" into a governed, audited, policy-driven workflow.</div>
+    <h3>The two pillars you\u2019ll touch</h3>
+    <ul>
+      <li><b>Access Requests</b> \u2014 a user requests access to an app or role through a catalog; the request routes to the right <b>approver</b> (manager, app owner), can require <b>justification</b>, can enforce <b>SoD checks</b> (block a toxic combination from 06.2), and can be <b>time-bound</b> so it auto-expires. This replaces untracked grants with a governed pipeline.</li>
+      <li><b>Access Certifications</b> \u2014 the campaign engine from 06.3, native in Okta: reviewers periodically attest that access is still needed, with the signals and auto-revoke you learned, producing the audit evidence for SOC 2 / ISO 27001 / SOX.</li>
+    </ul>
+    <h3>Why it matters operationally</h3>
+    <p>OIG closes the loop you\u2019ve built across the course: lifecycle (Okta provisioning) grants birthright access, OIG <b>Access Requests</b> govern the extra access people ask for, and OIG <b>Certifications</b> periodically re-justify all of it. Every grant has an approver, a reason, and an expiry; every campaign produces evidence. It\u2019s the governance operating model from 06.4, implemented as Okta features.</p>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the JD &amp; bonus points:</b> "support user access reviews and entitlement certifications using Okta Identity Governance (OIG) to ensure alignment with SOC2, ISO 27001, and SOX" \u2014 and OIG experience is listed as a bonus qualification. Knowing OIG = Access Requests + Certifications, with approvals, justification, SoD checks, and time-bound access, is exactly the fluency these roles want. The lab runs a governed access request end to end.</div></div>`,
+    example:`<p>An access request flowing through OIG \u2014 governed, checked, and time-bound, versus the old untracked way.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 a governed access request in OIG</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#00297a"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">OIG \u00b7 access request</div><div class="chip">OIG</div></div>
+    <div class="console-body"><div class="mono-out"><span style="color:#fbbf24">OLD WAY</span>: user emails IT "give me Salesforce admin"
+   \u2192 granted on trust, no record, never revisited  <span style="color:#f87171">\u2717 ungoverned</span>
+
+<span style="color:#34d399">OIG WAY</span>: user requests "Salesforce \u2013 Admin" from the catalog
+   \u2192 justification required ............. "covering for J. while on leave"
+   \u2192 SoD check ......................... no toxic combo \u2713
+   \u2192 routes to approver (app owner) .... approved \u2713
+   \u2192 granted, <span style="color:#22d3ee">time-bound (30 days, auto-expires)</span>
+   \u2192 surfaces in next certification ... re-justify or auto-revoke
+   = approver + reason + expiry + evidence  <span style="color:#34d399">\u2713 governed</span></div></div></div>
+    <p>Same access, completely different accountability. OIG turns a favor into a governed, audited, self-cleaning grant. In the lab you\u2019ll push a request through this workflow \u2014 supplying justification and approval to get it granted.</p></div>`,
+    lab:{ kind:'oig', id:'06.6', resource:'Salesforce \u2013 Admin', requesterHasConflict:false,
+      title:'Run a governed access request',
+      objective:'Submit an access request through Okta Identity Governance. The policy requires a business justification and approver sign-off, and the grant is time-bound. Provide what\u2019s needed, then submit.',
+      intro:'',
+      policy:{ requiresApproval:true, approverRole:'app owner', requiresJustification:true, autoExpiresDays:30, sodConflict:true }},
+    quiz:[
+      {q:'Okta Identity Governance (OIG) primarily adds which capabilities to Okta?',
+       o:['Faster login screens','Access Requests (with approval) and Access Certifications','A new firewall','Email hosting'],a:1,
+       e:'OIG brings governed access requests/approvals and certification campaigns into the Okta platform.'},
+      {q:'An OIG access request can enforce all of these EXCEPT:',
+       o:['Requiring a business justification','Routing to an approver','An SoD conflict check','Guaranteeing zero breaches'],a:3,
+       e:'OIG can require justification, route approvals, check SoD, and time-bound the grant \u2014 but no control guarantees zero breaches.'},
+      {q:'Making an OIG grant time-bound (auto-expiring) helps because:',
+       o:['It looks modern','Access cleans itself up and resurfaces for re-justification, preventing creep','It speeds the network','It removes the approver'],a:1,
+       e:'Time-bound access auto-expires and reappears in certification, directly fighting privilege creep \u2014 the governance operating model in action.'},
+      {q:'OIG certifications support compliance by:',
+       o:['Encrypting disks','Producing periodic, signed evidence that access was reviewed (SOC 2 / ISO 27001 / SOX)','Blocking SMS','Rotating passwords'],a:1,
+       e:'Certification campaigns generate the dated, attested evidence auditors require under frameworks like SOC 2, ISO 27001, and SOX.'}
     ]}
   ]},
 
@@ -2657,6 +2926,59 @@ actions:
       {q:'JIT elevation in PAM is conceptually the same as which Entra feature?',
        o:['Conditional Access','Privileged Identity Management (PIM)','Dynamic groups','Access Reviews'],a:1,
        e:'PIM is Entra\u2019s JIT for directory/Azure roles; JIT elevation is the same eligible-then-activate idea applied to infrastructure/PAM.'}
+    ]},
+  { id:'07.7', num:'07.7', title:'CyberArk components: Vault, CPM, PSM, PVWA', minutes:10,
+    dek:'The named building blocks of a CyberArk Self-Hosted (on-prem) deployment, and which one does what. This is core CyberArk Defender knowledge and an explicit job requirement.',
+    concept:`<p>You\u2019ve learned PAM concepts hands-on \u2014 vaulting, rotation, session isolation, JIT. Now name the actual <b>CyberArk components</b> that implement them. Job descriptions ask for "hands-on expertise with CyberArk components including PVWA, CPM, and PSM," so knowing each by name and role is essential.</p>
+    <div class="keyterm"><div class="kt-label">Core architecture</div><div class="kt-term">The four CyberArk Self-Hosted components</div>A CyberArk on-prem (Self-Hosted) deployment is built from four cooperating components: the <b>Digital Vault</b> (stores), the <b>CPM</b> (rotates), the <b>PSM</b> (isolates &amp; records sessions), and the <b>PVWA</b> (the web interface). Each maps directly to a concept you already practiced.</div>
+    <h3>The components, one by one</h3>
+    <ul>
+      <li><b>Digital Vault</b> \u2014 the hardened, encrypted core that <i>stores</i> all privileged credentials and secrets. It\u2019s deliberately isolated (its own server, locked-down). This is the "vault" from lesson 07.2 made concrete.</li>
+      <li><b>CPM \u2014 Central Policy Manager</b> \u2014 the component that <i>rotates and manages</i> credentials per policy: it changes passwords, verifies them, and reconciles them when they drift. The automatic rotation you saw on check-in is the CPM doing its job.</li>
+      <li><b>PSM \u2014 Privileged Session Manager</b> \u2014 the proxy that <i>isolates and records</i> privileged sessions, so the admin\u2019s machine never touches the target directly and every session is captured. This is lesson 07.3 made concrete.</li>
+      <li><b>PVWA \u2014 Password Vault Web Access</b> \u2014 the <i>web interface</i> where users log in to request access, check out credentials, and where admins manage the system. It\u2019s the front door humans actually click.</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">How they work together</div><div class="kt-term">A checkout, by component</div>A user logs into the <b>PVWA</b> to request a credential \u2192 the <b>Vault</b> releases it under policy \u2192 the <b>PSM</b> brokers an isolated, recorded session to the target \u2192 on check-in, the <b>CPM</b> rotates the credential. Four components, one seamless privileged-access cycle \u2014 the exact flow you operated in earlier labs.</div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>For the CyberArk Defender cert &amp; the JD:</b> Defender-level knowledge is largely about operating these components \u2014 onboarding accounts into the Vault, configuring CPM rotation policies, setting up PSM session management, and administering via the PVWA. There are more components in a full deployment (CCP/AAM for app secrets, PTA for threat analytics), but Vault/CPM/PSM/PVWA are the four you must know cold. The lab drills exactly this mapping.</div></div>`,
+    example:`<p>The privileged-access cycle you already ran, re-labeled with the CyberArk component responsible at each step.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 one checkout, mapped to components</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">cyberark \u00b7 components in a checkout</div><div class="chip">PAM</div></div>
+    <div class="console-body"><div class="mono-out">admin needs the prod-db root credential
+
+1  logs into <span style="color:#22d3ee">PVWA</span> (web UI) \u2192 requests access, MFA
+2  <span style="color:#22d3ee">Vault</span> (encrypted store) \u2192 releases the credential under policy
+3  <span style="color:#22d3ee">PSM</span> (session proxy) \u2192 opens an isolated, recorded session to prod-db
+                            (admin's laptop never touches the target)
+4  work happens \u2014 fully recorded
+5  check-in \u2192 <span style="color:#22d3ee">CPM</span> (policy manager) \u2192 rotates the credential
+
+PVWA = front door \u00b7 Vault = stores \u00b7 PSM = isolates+records \u00b7 CPM = rotates</div></div></div>
+    <p>Same cycle you operated in the vault labs, now with each step attributed to its component. Knowing which box does what is what turns "I get PAM concepts" into "I can administer CyberArk." In the lab you\u2019ll match each task to the right component.</p></div>`,
+    lab:{ kind:'components', id:'07.7',
+      title:'Match the CyberArk component',
+      objective:'For each administrative task, select the CyberArk component responsible: the <b>Vault</b> (stores), <b>CPM</b> (rotates), <b>PSM</b> (isolates &amp; records sessions), or <b>PVWA</b> (web access). All correct to pass.',
+      intro:'',
+      tasks:[
+        {task:'Securely store all privileged credentials in an encrypted, hardened repository.', component:'vault'},
+        {task:'Automatically rotate a service account\u2019s password on a schedule.', component:'cpm'},
+        {task:'Proxy and record an admin\u2019s RDP session to a domain controller.', component:'psm'},
+        {task:'Provide the web page where a user logs in to request and check out access.', component:'pvwa'},
+        {task:'Verify and reconcile a credential whose value drifted out of sync.', component:'cpm'},
+        {task:'Ensure the admin\u2019s workstation never directly touches the target server.', component:'psm'}
+      ]},
+    quiz:[
+      {q:'Which CyberArk component automatically rotates and manages credentials per policy?',
+       o:['PVWA','CPM (Central Policy Manager)','PSM','The Vault alone'],a:1,
+       e:'The CPM changes, verifies, and reconciles credentials according to policy \u2014 the engine behind automatic rotation.'},
+      {q:'The PSM (Privileged Session Manager) is responsible for:',
+       o:['Storing passwords','Isolating and recording privileged sessions via a proxy','The web login page','Rotating credentials'],a:1,
+       e:'PSM proxies the session so the endpoint never touches the target, and records the full session for audit.'},
+      {q:'The PVWA is:',
+       o:['The encrypted credential store','The web interface where users request/check out access and admins manage the system','The rotation engine','The session proxy'],a:1,
+       e:'Password Vault Web Access is the human-facing web UI; the Vault stores, CPM rotates, PSM isolates/records.'},
+      {q:'In a checkout, the correct order of components is:',
+       o:['CPM \u2192 PSM \u2192 Vault \u2192 PVWA','PVWA (request) \u2192 Vault (release) \u2192 PSM (isolated session) \u2192 CPM (rotate on check-in)','PSM \u2192 PVWA \u2192 CPM \u2192 Vault','Vault \u2192 CPM \u2192 PVWA \u2192 PSM'],a:1,
+       e:'A user requests via PVWA, the Vault releases the secret, PSM brokers the recorded session, and CPM rotates on check-in.'}
     ]}
   ]},
 
@@ -3636,6 +3958,503 @@ result: "we believe it's fine" \u2192 <span style="color:#34d399">"here is the s
        o:['Faster hardware','What auditors and regulators test an organization for','Screen resolution','Network speed'],a:1,
        e:'"Correct, monitored, and compliant" access is precisely the control objective compliance frameworks assess \u2014 and what IAM is built to demonstrate.'}
     ]}
+  ]},
+/* ===================== MODULE 12 — IAM Automation & Scripting ===================== */
+{ id:'M12', num:'12', title:'IAM Automation &amp; Scripting', sub:'4 lessons \u00b7 PowerShell \u00b7 Python \u00b7 Workflows \u00b7 REST',
+  blurb:'The skill that separates an IAM operator from an IAM engineer: making identity run itself. Real PowerShell with Microsoft Graph, Python for IAM tasks, Okta Workflows for no-code orchestration, and the REST API fundamentals all of it rides on.',
+  lessons:[
+  /* ---------------- 12.1 ---------------- */
+  { id:'12.1', num:'12.1', title:'REST APIs: the language of IAM automation', minutes:10,
+    dek:'Every IAM platform is an API with a UI bolted on. Learn the HTTP verbs, status codes, and tokens, and you can automate anything Okta or Entra can do.',
+    concept:`<p>Before any script, understand what scripts actually <i>do</i>: they make <b>REST API calls</b>. The Okta admin console, the Entra portal, every click you make is, under the hood, an HTTP request to a REST API. Automation just makes those requests directly.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">REST API</div>A web interface where you act on <b>resources</b> (users, groups, apps) by sending HTTP requests to URLs (endpoints). The <b>method</b> says what to do, the <b>path</b> says to which resource, the body carries data, and a <b>status code</b> tells you what happened.</div>
+    <h3>The four methods you\u2019ll use constantly</h3>
+    <ul>
+      <li><b>GET</b> \u2014 read a resource. "List all users", "get this group." Never changes anything.</li>
+      <li><b>POST</b> \u2014 create a resource. "Create a user", "add a group." Success is usually <code>201 Created</code>.</li>
+      <li><b>PUT</b> (or PATCH) \u2014 update a resource. "Change this user\u2019s department."</li>
+      <li><b>DELETE</b> \u2014 remove a resource. "Deactivate/delete this user." Success is often <code>204 No Content</code>.</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Status codes</div><b>2xx</b> = success (200 OK, 201 Created, 204 No Content). <b>4xx</b> = you did something wrong (400 bad request, 401 unauthenticated, 403 forbidden, 404 not found). <b>5xx</b> = the server erred. As the "log detective," reading these tells you instantly whether a failure is auth (401/403), a typo in the path (404), or bad data (400).</div>
+    <h3>Authentication: the API token</h3>
+    <p>An API won\u2019t talk to just anyone. Okta calls carry an <b>API token</b> (header <code>Authorization: SSWS &lt;token&gt;</code>); Microsoft Graph carries an <b>OAuth 2.0 bearer token</b> (<code>Authorization: Bearer &lt;token&gt;</code>) obtained via the client-credentials or delegated flows you met in Module 02. A <b>401</b> means the token is missing or expired; a <b>403</b> means the token is valid but lacks the scope/permission for that action. That distinction is a daily troubleshooting cue.</p>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the field &amp; the JD:</b> "Foundational understanding of REST API concepts (GET, POST, PUT, DELETE and status codes)" is a literal line in Okta IAM job descriptions. Everything else in this module (PowerShell, Python, Workflows) is just a friendlier way to make these same calls. Master the request and you can read any IAM platform\u2019s API docs and automate it.</div></div>`,
+    example:`<p>The same "create a user" operation, shown as the raw REST call your tools generate under the hood.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 an Okta API request, decoded</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">POST /api/v1/users</div><div class="chip">API</div></div>
+    <div class="console-body"><div class="mono-out">POST https://your-org.okta.com/api/v1/users?activate=true
+Authorization: SSWS &lt;api-token&gt;          <span style="color:#5c6b80"># who's calling</span>
+Content-Type: application/json
+{
+  "profile": { "firstName":"Amy", "lastName":"Chen",
+               "email":"amy@northwind.com", "login":"amy@northwind.com" }
+}
+\u2192 <span style="color:#34d399">201 Created</span>   <span style="color:#5c6b80"># success: the user resource was created</span>
+
+other outcomes:
+  <span style="color:#fbbf24">401</span> token missing/expired   <span style="color:#fbbf24">403</span> token lacks permission
+  <span style="color:#fbbf24">400</span> bad/missing fields      <span style="color:#fbbf24">404</span> wrong endpoint path</div></div></div>
+    <p>POST to the users endpoint, authenticated with a token, body describing the user, and a <code>201</code> back. Every "create" in IAM looks like this. In the lab you\u2019ll choose the right method and success status for a set of common IAM operations.</p></div>`,
+    lab:{ kind:'rest', id:'12.1', api:'Okta', base:'https://your-org.okta.com/api/v1',
+      title:'Build the IAM API calls',
+      objective:'For each IAM operation, pick the correct HTTP method and the status code a successful call returns. This is the REST fluency every Okta/Entra automation rides on.',
+      intro:'',
+      ops:[
+        {goal:'List all users', path:'/users', method:'GET', expectStatus:200},
+        {goal:'Create a new user', path:'/users', method:'POST', expectStatus:201},
+        {goal:'Update a user\u2019s profile', path:'/users/{id}', method:'PUT', expectStatus:200},
+        {goal:'Deactivate (delete) a user', path:'/users/{id}', method:'DELETE', expectStatus:204},
+        {goal:'Get one group by ID', path:'/groups/{id}', method:'GET', expectStatus:200}
+      ]},
+    quiz:[
+      {q:'Which HTTP method creates a new resource (e.g. a user)?',
+       o:['GET','POST','DELETE','HEAD'],a:1,
+       e:'POST creates resources; a successful create typically returns 201 Created.'},
+      {q:'An API call returns 401. The most likely cause is:',
+       o:['The user has too much access','The API token is missing or expired (not authenticated)','The server crashed','The path is too long'],a:1,
+       e:'401 = unauthenticated. 403 would mean authenticated-but-not-permitted; 404 a wrong path; 400 bad data.'},
+      {q:'You can read a user without changing anything using:',
+       o:['DELETE','GET','POST','PUT'],a:1,
+       e:'GET retrieves a resource and is safe/idempotent \u2014 it never modifies state.'},
+      {q:'The difference between a 401 and a 403 is:',
+       o:['No difference','401 = not authenticated; 403 = authenticated but lacking permission/scope','401 is faster','403 means success'],a:1,
+       e:'401 means the token is missing/invalid; 403 means the token is valid but doesn\u2019t have rights for that action \u2014 a key troubleshooting distinction.'}
+    ]},
+  /* ---------------- 12.2 ---------------- */
+  { id:'12.2', num:'12.2', title:'PowerShell & Microsoft Graph', minutes:11,
+    dek:'The automation workhorse for Entra/Microsoft shops. Real Graph PowerShell to read, create, and govern identities at scale.',
+    concept:`<p>In Microsoft environments, <b>PowerShell with the Microsoft Graph SDK</b> is <i>the</i> identity automation tool. Microsoft Graph is the single REST API behind Entra ID, Microsoft 365, Intune, and more; the Graph PowerShell module wraps it in friendly commands.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Microsoft Graph + Graph PowerShell</div><b>Microsoft Graph</b> is the unified REST API for the Microsoft cloud (endpoint <code>https://graph.microsoft.com</code>). The <b>Microsoft.Graph</b> PowerShell module gives you cmdlets like <code>Get-MgUser</code> that call Graph for you, handling tokens and paging. It\u2019s how IAM engineers bulk-manage identities, automate JML, and pull governance reports.</div>
+    <h3>The pattern: connect, scope, act</h3>
+    <p>Every Graph PowerShell script follows the same shape: authenticate with the <b>scopes</b> (permissions) you need, then run cmdlets. Scopes map directly to the least-privilege idea from Module 01 \u2014 you request only the permissions the task requires.</p>
+    <div class="codeblock"><div class="cb-label">PowerShell \u00b7 connect and read</div><pre><span style="color:#5c6b80"># Connect with least-privilege scopes (consent prompt on first run)</span>
+Connect-MgGraph -Scopes "User.Read.All","Group.ReadWrite.All"
+
+<span style="color:#5c6b80"># Find all members of the Finance department</span>
+Get-MgUser -Filter "department eq 'Finance'" -All |
+    Select-Object DisplayName, UserPrincipalName, Department</pre></div>
+    <h3>Creating and governing identities</h3>
+    <p>The same module creates users, manages group membership (the access lever from Module 09), and pulls the audit data governance needs:</p>
+    <div class="codeblock"><div class="cb-label">PowerShell \u00b7 add a user to a group, then audit dormant accounts</div><pre><span style="color:#5c6b80"># Add a joiner to the Finance access group (drives downstream access)</span>
+New-MgGroupMember -GroupId $groupId -DirectoryObjectId $userId
+
+<span style="color:#5c6b80"># Governance: find sign-ins older than 90 days (dormant-account hunt)</span>
+$cutoff = (Get-Date).AddDays(-90)
+Get-MgUser -All -Property DisplayName,SignInActivity |
+    Where-Object { $_.SignInActivity.LastSignInDateTime -lt $cutoff } |
+    Select-Object DisplayName</pre></div>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>Scopes are least privilege for automation:</b> a script that only reads should connect with <code>User.Read.All</code>, never <code>User.ReadWrite.All</code>. Over-scoping a service principal or script is exactly the over-privilege problem from Module 01, now in automation form \u2014 and a common audit finding. Request the minimum, and prefer app registrations with tightly scoped permissions for unattended scripts.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the bio &amp; JD:</b> "I use PowerShell with Microsoft Graph to automate identity processes" appears verbatim in IAM engineer profiles. Even reading-level fluency \u2014 connect, filter, select, pipe \u2014 lets you bulk-audit access, automate JML, and produce governance evidence far faster than clicking. In the lab you\u2019ll order a real Graph script that off-boards a leaver.</div></div>`,
+    example:`<p>A complete, realistic leaver-offboarding script in Graph PowerShell. Read it top to bottom \u2014 it\u2019s the JML logic from Module 04 expressed as automation.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 automate a leaver in PowerShell + Graph</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#012a70"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">offboard-leaver.ps1</div><div class="chip">POWERSHELL</div></div>
+    <div class="console-body"><div class="mono-out"><span style="color:#5c6b80"># 1. authenticate with just the scopes we need</span>
+Connect-MgGraph -Scopes "User.ReadWrite.All","Group.ReadWrite.All"
+
+<span style="color:#5c6b80"># 2. resolve the leaver to their object id</span>
+$u = Get-MgUser -Filter "userPrincipalName eq 'amy@northwind.com'"
+
+<span style="color:#5c6b80"># 3. block sign-in immediately (cut access first \u2014 Module 04)</span>
+Update-MgUser -UserId $u.Id -AccountEnabled:$false
+
+<span style="color:#5c6b80"># 4. revoke active sessions/tokens so existing logins die</span>
+Revoke-MgUserSignInSession -UserId $u.Id
+
+<span style="color:#5c6b80"># 5. remove from all groups (strip downstream access)</span>
+Get-MgUserMemberOf -UserId $u.Id | ForEach-Object {
+    Remove-MgGroupMemberByRef -GroupId $_.Id -DirectoryObjectId $u.Id }
+
+<span style="color:#34d399"># leaver is disabled, sessions killed, access stripped \u2014 verifiably</span></div></div></div>
+    <p>Disable first, kill sessions, then strip access \u2014 the exact leaver discipline from Module 04, now automated and repeatable. In the lab you\u2019ll put these steps in the right order yourself.</p></div>`,
+    lab:{ kind:'scriptorder', id:'12.2', lang:'PowerShell + Graph', titleBar:'offboard-leaver.ps1',
+      title:'Order the off-boarding script',
+      objective:'Arrange the PowerShell + Graph steps so the leaver is off-boarded safely: authenticate, find the user, disable sign-in, revoke sessions, then remove group access. Order matters \u2014 a step can\u2019t run before the one it depends on.',
+      intro:'',
+      steps:[
+        {label:'Connect-MgGraph -Scopes ...', code:'Connect-MgGraph -Scopes "User.ReadWrite.All","Group.ReadWrite.All"'},
+        {label:'Get-MgUser -Filter ... (resolve the user)', code:'$u = Get-MgUser -Filter "userPrincipalName eq amy@northwind.com"'},
+        {label:'Update-MgUser -AccountEnabled:$false', code:'Update-MgUser -UserId $u.Id -AccountEnabled:$false'},
+        {label:'Revoke-MgUserSignInSession', code:'Revoke-MgUserSignInSession -UserId $u.Id'},
+        {label:'Remove from all groups', code:'Get-MgUserMemberOf -UserId $u.Id | ForEach-Object { Remove-MgGroupMemberByRef ... }'}
+      ],
+      start:[1,0,3,2,4],
+      solution:[0,1,2,3,4]},
+    quiz:[
+      {q:'Microsoft Graph is:',
+       o:['A charting tool','The unified REST API behind Entra ID and the Microsoft cloud','A password vault','A network protocol'],a:1,
+       e:'Graph is the single API for Entra/M365/Intune; the Graph PowerShell module wraps it in cmdlets like Get-MgUser.'},
+      {q:'In Connect-MgGraph, "scopes" represent:',
+       o:['Screen size','The permissions the script is requesting \u2014 keep them least-privilege','The number of users','Network ports'],a:1,
+       e:'Scopes are the API permissions; a read-only script should request read scopes only, mirroring least privilege.'},
+      {q:'In the leaver script, why disable the account and revoke sessions before removing groups?',
+       o:['Alphabetical order','To cut active access immediately; existing sessions could otherwise persist','It runs faster','No reason'],a:1,
+       e:'Disabling sign-in and revoking tokens stops access now; existing sessions can outlive group removal, so kill them first \u2014 the Module 04 leaver discipline.'},
+      {q:'A script that only reports on users should connect with:',
+       o:['User.ReadWrite.All','User.Read.All (read-only scope)','Global Admin','No scope at all'],a:1,
+       e:'Least privilege for automation: request read-only scopes for read-only tasks; never over-scope a script or service principal.'}
+    ]},
+  /* ---------------- 12.3 ---------------- */
+  { id:'12.3', num:'12.3', title:'Python for IAM', minutes:10,
+    dek:'The cross-platform glue for identity work, from Okta to CyberArk. Real Python that calls IAM REST APIs and processes the results.',
+    concept:`<p><b>Python</b> is the other automation language IAM job descriptions ask for, prized because it talks to <i>everything</i> \u2014 Okta, CyberArk, AWS, custom apps \u2014 through their REST APIs, and excels at the data-wrangling governance work involves (parsing reports, reconciling accounts, generating evidence).</p>
+    <div class="keyterm"><div class="kt-label">Core idea</div><div class="kt-term">Python + requests = any IAM API</div>Python\u2019s <code>requests</code> library makes the HTTP calls from 12.1 directly. Authenticate with a token in the header, call the endpoint, read the JSON response. The same three moves work against any IAM platform\u2019s API \u2014 which is why Python is the universal IAM glue, especially for <b>CyberArk automation</b> and cross-system reconciliation.</div>
+    <h3>The pattern: headers, request, JSON</h3>
+    <div class="codeblock"><div class="cb-label">Python \u00b7 list deactivated Okta users</div><pre>import requests
+
+OKTA = "https://your-org.okta.com/api/v1"
+headers = {"Authorization": f"SSWS {token}",   <span style="color:#5c6b80"># the API token from 12.1</span>
+           "Accept": "application/json"}
+
+<span style="color:#5c6b80"># GET users filtered by status (a read \u2192 expect 200)</span>
+resp = requests.get(f"{OKTA}/users?filter=status eq \\"DEPROVISIONED\\"",
+                    headers=headers)
+resp.raise_for_status()           <span style="color:#5c6b80"># turns a 4xx/5xx into an error</span>
+for user in resp.json():
+    print(user["profile"]["login"])</pre></div>
+    <h3>Where Python shines in IAM: reconciliation</h3>
+    <p>A classic real task: compare HR\u2019s active workers against the IdP\u2019s active accounts to find <b>missed terminations</b> (the access-risk problem from governance). Python\u2019s sets make this trivial:</p>
+    <div class="codeblock"><div class="cb-label">Python \u00b7 find accounts that should be gone</div><pre>hr_active   = {w["email"] for w in hr_workers}        <span style="color:#5c6b80"># source of truth</span>
+idp_active  = {u["profile"]["login"] for u in idp_users}
+
+<span style="color:#5c6b80"># accounts active in the IdP but NOT active in HR = missed leavers</span>
+missed_terminations = idp_active - hr_active
+for login in missed_terminations:
+    print(f"RISK: {login} active in IdP but not in HR")</pre></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the JD:</b> "Python scripting for IAM workflows and CyberArk automation" is an explicit requirement on PAM-focused roles. You don\u2019t need to be a software engineer \u2014 the IAM use of Python is mostly: authenticate, call an API, compare/transform the JSON, act or report. That set-difference reconciliation above is the kind of script that finds the dangerous accounts no one noticed.</div></div>`,
+    example:`<p>A realistic Python script that reconciles HR against the IdP and flags risky accounts. This is governance work (Module 06) as automation.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 reconcile HR vs. IdP in Python</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f59e0b"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">reconcile_access.py</div><div class="chip">PYTHON</div></div>
+    <div class="console-body"><div class="mono-out"><span style="color:#5c6b80"># 1. import the HTTP library</span>
+import requests
+
+<span style="color:#5c6b80"># 2. set up auth headers with the API token</span>
+headers = {"Authorization": f"SSWS {token}"}
+
+<span style="color:#5c6b80"># 3. pull active accounts from the IdP (GET \u2192 200)</span>
+idp = requests.get(f"{OKTA}/users?filter=status eq \\"ACTIVE\\"",
+                   headers=headers).json()
+
+<span style="color:#5c6b80"># 4. load HR's active workers (the source of truth)</span>
+hr_active = load_hr_active()   <span style="color:#5c6b80"># from Workday export / API</span>
+
+<span style="color:#5c6b80"># 5. set difference = accounts that should be deprovisioned</span>
+risky = {u["profile"]["login"] for u in idp} - hr_active
+
+<span style="color:#5c6b80"># 6. report the findings for remediation</span>
+for login in risky:
+    print(f"MISSED TERMINATION: {login}")</span></div></div></div>
+    <p>Import, authenticate, pull, compare, report \u2014 six steps that surface every account active in the IdP but gone from HR. In the lab you\u2019ll order these steps so the reconciliation runs correctly.</p></div>`,
+    lab:{ kind:'scriptorder', id:'12.3', lang:'Python', titleBar:'reconcile_access.py',
+      title:'Order the reconciliation script',
+      objective:'Arrange the Python steps so the HR-vs-IdP reconciliation runs: import the library, set auth headers, pull IdP accounts, load HR\u2019s active list, compute the set difference, then report. A step can\u2019t use data it hasn\u2019t fetched yet.',
+      intro:'',
+      steps:[
+        {label:'import requests', code:'import requests'},
+        {label:'set auth headers', code:'headers = {"Authorization": f"SSWS {token}"}'},
+        {label:'GET active accounts from the IdP', code:'idp = requests.get(f"{OKTA}/users?filter=status eq ACTIVE", headers=headers).json()'},
+        {label:'load HR active workers (source of truth)', code:'hr_active = load_hr_active()'},
+        {label:'compute set difference (idp - hr)', code:'risky = {u["profile"]["login"] for u in idp} - hr_active'},
+        {label:'report the risky accounts', code:'for login in risky: print(f"MISSED TERMINATION: {login}")'}
+      ],
+      start:[2,0,4,1,5,3],
+      solution:[0,1,2,3,4,5]},
+    quiz:[
+      {q:'Why is Python popular for IAM automation specifically?',
+       o:['It\u2019s the only language that exists','It talks to any platform\u2019s REST API and excels at processing/reconciling the JSON results','It runs only on Windows','It replaces the IdP'],a:1,
+       e:'Python + requests calls any IAM API, and its data tools make reconciliation and reporting easy \u2014 hence its use across Okta, CyberArk, and more.'},
+      {q:'In the reconciliation script, "idp_active - hr_active" (a set difference) finds:',
+       o:['New hires','Accounts active in the IdP but not active in HR \u2014 i.e. missed terminations','Disabled accounts','Groups'],a:1,
+       e:'Subtracting HR\u2019s active set from the IdP\u2019s active set leaves accounts that exist in the IdP but should be gone \u2014 the missed-leaver risk.'},
+      {q:'resp.raise_for_status() is used to:',
+       o:['Speed up the call','Turn a 4xx/5xx HTTP error into a Python exception so failures don\u2019t pass silently','Add a user','Encrypt the token'],a:1,
+       e:'It makes the script fail loudly on a bad status code (e.g. 401/403/404) instead of continuing with empty/garbage data.'},
+      {q:'The IAM use of Python is mostly:',
+       o:['Building operating systems','Authenticate, call an API, transform/compare the JSON, then act or report','3D graphics','Writing firmware'],a:1,
+       e:'IAM scripting is glue work: call APIs and wrangle the results \u2014 you don\u2019t need to be a full software engineer to be effective.'}
+    ]},
+  /* ---------------- 12.4 ---------------- */
+  { id:'12.4', num:'12.4', title:'Okta Workflows: no-code orchestration', minutes:10,
+    dek:'Not every automation needs code. Okta Workflows is a visual, low-code engine for lifecycle orchestration, and a named skill on Okta job postings.',
+    concept:`<p>Code is powerful but not always the right tool. <b>Okta Workflows</b> is Okta\u2019s <b>low-code/no-code</b> automation platform: you build identity automations by connecting visual <b>cards</b> instead of writing scripts. It\u2019s explicitly listed on Okta IAM job descriptions, often as the thing you\u2019ll "grow into."</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Okta Workflows</div>A visual automation engine where a <b>flow</b> starts with an <b>event trigger</b> (e.g. "user added to group", "user deactivated") and runs a sequence of <b>action cards</b> (call an API, send a Slack message, update a record). It orchestrates lifecycle and governance tasks without code, and is how many shops handle JML edge cases the IdP can\u2019t natively.</div>
+    <h3>Anatomy of a flow</h3>
+    <ul>
+      <li><b>Trigger</b> \u2014 the event that starts the flow. Every flow begins with exactly one. "When a user is deactivated in Okta\u2026"</li>
+      <li><b>Action cards</b> \u2014 the steps that run in order: look something up, branch on a condition, call an external API, notify someone.</li>
+      <li><b>Connectors</b> \u2014 pre-built integrations (Okta, Google, Slack, HTTP) so cards can act on real systems.</li>
+    </ul>
+    <p>The logic mirrors the scripts you just wrote \u2014 a trigger plus ordered steps \u2014 but it\u2019s visual, auditable by non-developers, and maintained without a code deployment. The trade-off: great for orchestration and glue, less suited to heavy data processing (where Python wins).</p>
+    <div class="keyterm"><div class="kt-label">When to use which</div><div class="kt-term">Workflows vs. code</div>Reach for <b>Okta Workflows</b> for event-driven lifecycle orchestration inside the Okta ecosystem (a leaver triggers a Slack alert + a ticket + a downstream API call). Reach for <b>PowerShell/Graph or Python</b> for bulk operations, complex data reconciliation, cross-platform work, or anything outside Okta\u2019s connectors. Mature teams use both.</div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the JD:</b> "Help triage Okta Workflow errors" and "comfort using Okta Workflows" are real responsibilities for Associate IAM Engineers. Troubleshooting a broken flow is the same log-detective skill as SSO triage (Module 05): which card failed, what did it return, why. Knowing a flow is just a trigger + ordered actions is the foundation.</div></div>`,
+    example:`<p>A real lifecycle flow: when a user is deactivated, clean up and notify. Notice it\u2019s the leaver logic again \u2014 now as visual cards.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 a leaver flow in Okta Workflows</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#00297a"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">Workflows \u00b7 leaver-cleanup</div><div class="chip">NO-CODE</div></div>
+    <div class="console-body"><div class="mono-out"><span style="color:#22d3ee">TRIGGER</span>  User Deactivated in Okta
+   \u2193
+<span style="color:#94a3b8">ACTION</span>   Read User \u2014 get the leaver\u2019s profile &amp; manager
+   \u2193
+<span style="color:#94a3b8">ACTION</span>   Remove User from all Groups \u2014 strip downstream access
+   \u2193
+<span style="color:#94a3b8">ACTION</span>   Call HTTP \u2014 deprovision a downstream app via its API
+   \u2193
+<span style="color:#94a3b8">ACTION</span>   Send Slack message \u2014 notify IT + the manager
+   \u2193
+<span style="color:#34d399">DONE</span>     leaver cleaned up &amp; everyone notified, no code</div></div></div>
+    <p>One trigger, four ordered actions \u2014 the same shape as the scripts, built by connecting cards. In the lab you\u2019ll arrange a flow\u2019s cards so it runs correctly, starting (as every flow must) with its trigger.</p></div>`,
+    lab:{ kind:'flow', id:'12.4', flowName:'joiner-welcome',
+      title:'Build a joiner Workflow',
+      objective:'Arrange the Okta Workflows cards into a working joiner automation. It must <b>start with the trigger</b> (the event), then run the actions in a sensible order: look up the user, add them to their department group, create a downstream account, and notify their manager.',
+      intro:'',
+      cards:[
+        {type:'trigger', label:'Trigger: User Added to Okta'},
+        {type:'action', label:'Read User \u2014 get profile (dept, manager)'},
+        {type:'action', label:'Add User to Department Group'},
+        {type:'action', label:'Call HTTP \u2014 create downstream app account'},
+        {type:'action', label:'Send Slack \u2014 welcome + notify manager'}
+      ],
+      start:[2,0,3,1,4],
+      solution:[0,1,2,3,4]},
+    quiz:[
+      {q:'Every Okta Workflows flow begins with:',
+       o:['An action card','Exactly one event trigger','A Slack message','A password'],a:1,
+       e:'A flow starts with a single trigger (the event), then runs its action cards in order.'},
+      {q:'Okta Workflows is best described as:',
+       o:['A coding language','A visual low-code automation engine for identity orchestration','A firewall','A directory'],a:1,
+       e:'Workflows connects visual cards (trigger + actions) to automate lifecycle/governance tasks without writing code.'},
+      {q:'You\u2019d choose Python/PowerShell over Okta Workflows when:',
+       o:['Never','You need bulk operations, heavy data reconciliation, or cross-platform work beyond Okta\u2019s connectors','Sending one Slack message','Starting any flow'],a:1,
+       e:'Workflows excels at event-driven orchestration in the Okta ecosystem; code wins for bulk/data-heavy/cross-platform tasks. Mature teams use both.'},
+      {q:'Troubleshooting a failed Workflow is most like:',
+       o:['Rebooting a server','SSO log-detective work \u2014 find which card failed, what it returned, and why','Resetting a password','Buying hardware'],a:1,
+       e:'It\u2019s the same diagnostic skill as SSO triage: inspect the failing step\u2019s input/output and error to find the cause.'}
+    ]}
+  ]},
+/* ===================== MODULE 13 — Authentication Deep Dive ===================== */
+{ id:'M13', num:'13', title:'Authentication Deep Dive', sub:'4 lessons \u00b7 MFA \u00b7 certs \u00b7 device assurance',
+  blurb:'Beyond "turn on MFA." The factor types and which actually resist phishing, certificate-based authentication end to end, and Okta Device Assurance enforcing device posture, the controls that make modern authentication strong rather than just present.',
+  lessons:[
+  /* ---------------- 13.1 ---------------- */
+  { id:'13.1', num:'13.1', title:'Authentication factors & MFA strength', minutes:9,
+    dek:'Not all MFA is equal. The difference between MFA that stops an attacker and MFA that merely annoys them is the factor type.',
+    concept:`<p>You\u2019ve enabled MFA in earlier modules. Now go deeper: <i>which</i> factors, and why some are dramatically stronger than others. "We have MFA" is not the same as "we have phishing-resistant MFA," and serious shops know the difference.</p>
+    <div class="keyterm"><div class="kt-label">The three factor categories</div><div class="kt-term">Something you know / have / are</div><b>Knowledge</b> (password, PIN), <b>possession</b> (phone, security key, smart card), and <b>inherence</b> (fingerprint, face). True MFA combines factors from <b>different categories</b>; two passwords aren\u2019t MFA. Authentication strength comes from how hard each factor is to steal remotely.</div>
+    <h3>The factor strength ladder</h3>
+    <p>Roughly weakest to strongest, and why:</p>
+    <ul>
+      <li><b>Password alone</b> \u2014 phishable, guessable, reused. The thing MFA exists to backstop.</li>
+      <li><b>SMS OTP</b> \u2014 better than nothing, but vulnerable to SIM-swap and real-time phishing. Discouraged for high-value access.</li>
+      <li><b>TOTP / push</b> \u2014 authenticator-app codes or push approvals; resist SIM-swap but can be <b>phished</b> (relayed in real time) or defeated by <b>MFA fatigue</b> (spamming approvals until someone taps yes).</li>
+      <li><b>Push with number matching</b> \u2014 you type a number shown on the login screen, defeating blind fatigue taps. A meaningful step up.</li>
+      <li><b>Phishing-resistant: FIDO2/WebAuthn passkeys, PIV/smart cards, Okta FastPass</b> \u2014 cryptographically bound to the legitimate site/device, so a fake login page gets nothing. The gold standard.</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Phishing-resistant MFA</div>Authentication that can\u2019t be relayed through a fake site because the credential is cryptographically tied to the real origin and device (FIDO2/WebAuthn, PIV smart cards, Okta FastPass). It\u2019s the control regulators and Zero Trust programs increasingly <i>require</i> for privileged and sensitive access.</div>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>MFA fatigue is a real attack:</b> several major breaches happened despite MFA, because attackers with a stolen password spammed push approvals until a tired user tapped "approve." Number matching helps; phishing-resistant factors eliminate the class entirely. "We have MFA" didn\u2019t save those orgs \u2014 the <i>type</i> of MFA is what matters.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>For the role:</b> "implemented MFA policies" is on every IAM resume, but the senior signal is being able to say <i>which factors and why</i> \u2014 e.g., "we required phishing-resistant FIDO2 for admins, number-matching push for staff, and retired SMS." That nuance is exactly what 13.1 gives you.</div></div>`,
+    example:`<p>The same stolen password, against two MFA setups. Watch where the attack dies.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 weak vs. phishing-resistant MFA</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">attacker has the password \u2014 now what?</div></div>
+    <div class="console-body"><div class="mono-out">attacker phished the password and proxies a fake login page
+
+<span style="color:#fbbf24">SETUP A: password + push approval</span>
+  fake page relays the login \u2192 real push sent to user
+  attacker spams approvals (MFA fatigue) \u2192 user eventually taps yes
+  \u2192 <span style="color:#f87171">COMPROMISED</span>  (MFA present, but phishable)
+
+<span style="color:#34d399">SETUP B: password + FIDO2 passkey</span>
+  passkey is bound to the REAL origin; the fake site isn't it
+  the cryptographic challenge simply won't satisfy \u2192 nothing to relay
+  \u2192 <span style="color:#34d399">ATTACK FAILS</span>  (phishing-resistant by design)</div></div></div>
+    <p>Both setups "have MFA." Only one survives a real phishing attack, because the factor is cryptographically tied to the legitimate site. In the lab you\u2019ll classify factors by strength and phishing-resistance.</p></div>`,
+    lab:{ kind:'classify', id:'13.1', mode:'mfa',
+      title:'Rank the factors',
+      objective:'Tag each authentication factor as <b>Phishing-Resistant</b> (cryptographically bound \u2014 FIDO2, PIV, FastPass) or <b>Phishable</b> (can be relayed, SIM-swapped, or fatigued \u2014 SMS, TOTP, plain push). Knowing the line is the point.',
+      intro:'Tag each factor. All correct to pass.',
+      threeway:['Phishing-Resistant','Phishable'],
+      twoway:true,
+      items:[
+        {t:'FIDO2 / WebAuthn passkey on a security key.',layer:'Phishing-Resistant'},
+        {t:'SMS one-time code texted to a phone.',layer:'Phishable'},
+        {t:'PIV smart card with a client certificate.',layer:'Phishing-Resistant'},
+        {t:'TOTP six-digit code from an authenticator app.',layer:'Phishable'},
+        {t:'Plain push approval (tap yes/no).',layer:'Phishable'},
+        {t:'Okta FastPass (device-bound, origin-checked).',layer:'Phishing-Resistant'}
+      ]},
+    quiz:[
+      {q:'True multi-factor authentication requires:',
+       o:['Two passwords','Factors from different categories (know / have / are)','A longer password','Two phones'],a:1,
+       e:'MFA combines categories \u2014 e.g. password (know) + security key (have). Two of the same category isn\u2019t MFA.'},
+      {q:'"Phishing-resistant MFA" means the factor is:',
+       o:['Longer','Cryptographically bound to the real site/device so a fake page can\u2019t relay it','Sent by SMS','Easier to type'],a:1,
+       e:'FIDO2, PIV, and FastPass tie the credential to the legitimate origin/device, so phishing proxies get nothing usable.'},
+      {q:'MFA fatigue attacks succeed against:',
+       o:['FIDO2 passkeys','Plain push approvals (spam until the user taps yes)','Smart cards','Number-matching push'],a:1,
+       e:'Blind push approvals can be spammed; number matching and phishing-resistant factors defeat this.'},
+      {q:'For privileged/admin access, the strongest choice is:',
+       o:['SMS OTP','Phishing-resistant MFA (FIDO2 / PIV / FastPass)','Password only','Security questions'],a:1,
+       e:'High-value access warrants phishing-resistant factors, which regulators and Zero Trust programs increasingly require.'}
+    ]},
+  /* ---------------- 13.2 ---------------- */
+  { id:'13.2', num:'13.2', title:'Certificate-based authentication', minutes:10,
+    dek:'How smart cards and client certificates prove identity with cryptography instead of a shared secret. Named on IAM job descriptions, and a pillar of phishing-resistant auth.',
+    concept:`<p><b>Certificate-based authentication (CBA)</b> replaces "prove you know a secret" with "prove you hold a private key." It\u2019s the cryptography behind PIV/CAC smart cards, client-certificate logins, and much of what makes authentication phishing-resistant.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Certificate-based authentication (CBA)</div>The user (or device) presents an <b>X.509 client certificate</b> instead of, or alongside, a password. The certificate contains a public key and an identity (the Subject); the holder proves possession of the matching <b>private key</b>, which never leaves the card/device. There\u2019s no shared secret to phish.</div>
+    <h3>How it works, conceptually</h3>
+    <ul>
+      <li>A trusted <b>Certificate Authority (CA)</b> issues the user a certificate binding their identity to a key pair.</li>
+      <li>At login, the user presents the certificate and signs a challenge with the <b>private key</b> (held on a smart card or TPM, never transmitted).</li>
+      <li>The server validates the certificate and maps its <b>Subject</b> to a user identity.</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">What the server must validate</div><div class="kt-term">Trust, time, revocation, usage, identity</div>A valid CBA login requires: the cert <b>chains to a trusted CA</b>; it\u2019s <b>within its validity period</b> (notBefore/notOnOrAfter, like a SAML assertion\u2019s window); it\u2019s <b>not revoked</b> (checked via CRL or OCSP); it has the right <b>key usage</b> (client authentication); and its <b>Subject maps</b> to a real account. Miss any one and authentication fails \u2014 which is exactly why CBA is strong.</div>
+    <h3>Why it\u2019s phishing-resistant</h3>
+    <p>There\u2019s no password or code to type into a fake page, and the private key never leaves the hardware. An attacker can\u2019t phish what is never transmitted and never leaves a smart card. This is why government (PIV/CAC) and high-security environments rely on it, and why it sits in the phishing-resistant tier alongside FIDO2.</p>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>Revocation is the operational catch:</b> certificates are issued for months or years, so when someone leaves or a card is lost, you must <b>revoke</b> the certificate (publish it to a CRL / OCSP) or the credential keeps working. Certificate lifecycle \u2014 issuance, renewal, and especially revocation \u2014 is real IAM work, and a missed revocation is the CBA equivalent of a missed termination.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the JD:</b> "certificate-based authentication" is listed alongside SSO, MFA, SAML, OAuth, and OIDC. You don\u2019t need to run a PKI, but you should be able to explain the chain of validation \u2014 trust, time, revocation, usage, identity \u2014 and why CBA resists phishing. The lab walks you through fixing a rejected certificate, check by check.</div></div>`,
+    example:`<p>A client certificate presented at login, validated check by check \u2014 the same disciplined validation you saw with SAML assertions, now for X.509.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 validating a client certificate</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">client-cert \u00b7 validate</div><div class="chip">X.509</div></div>
+    <div class="console-body"><div class="mono-out">presented certificate:
+  Subject  : amy@corp            <span style="color:#34d399">\u2713 maps to a user</span>
+  Issuer   : Corp Issuing CA      <span style="color:#34d399">\u2713 chains to trusted CA</span>
+  Validity : now within window     <span style="color:#34d399">\u2713 not expired</span>
+  Revoked  : no (OCSP good)         <span style="color:#34d399">\u2713 not revoked</span>
+  Key Usage: clientAuth             <span style="color:#34d399">\u2713 valid for client authentication</span>
+\u2192 <span style="color:#34d399">authenticated</span> \u2014 user proved possession of the private key, no secret sent
+
+if ANY check failed (untrusted issuer, expired, revoked,
+   wrong usage, no subject) \u2192 <span style="color:#f87171">rejected</span></div></div></div>
+    <p>Five checks, all strict, no shared secret in sight. That strictness is the strength. In the lab you\u2019ll be handed a certificate failing several of these and repair each until it authenticates.</p></div>`,
+    lab:{ kind:'certauth', id:'13.2',
+      title:'Fix the rejected certificate',
+      objective:'A client certificate is being rejected at login. Repair each problem \u2014 re-issue from a trusted CA, fix the validity period, clear the revocation, add the clientAuth usage, and bind the Subject to a user \u2014 then validate until it authenticates.',
+      intro:'',
+      ctx:{ now:1000, trustedCAs:['Corp Issuing CA'] },
+      start:{ subject:'', issuer:'Sketchy CA', notBefore:200, notOnOrAfter:300, revoked:true, keyUsageClientAuth:false, chainsToTrustedCA:false }},
+    quiz:[
+      {q:'In certificate-based authentication, the user proves identity by:',
+       o:['Typing a password','Proving possession of a private key that never leaves their card/device','Sending an SMS','Answering questions'],a:1,
+       e:'CBA relies on holding a private key (on a smart card/TPM) and signing a challenge \u2014 no shared secret is transmitted.'},
+      {q:'Which is NOT part of validating a client certificate?',
+       o:['It chains to a trusted CA','It is within its validity period and not revoked','It has client-auth key usage','The user\u2019s favorite color'],a:3,
+       e:'Validation checks trust chain, validity window, revocation, key usage, and subject mapping \u2014 cryptographic and identity facts, not preferences.'},
+      {q:'Certificate-based auth is phishing-resistant because:',
+       o:['Certificates are long','There is no password/code to enter into a fake site, and the private key never leaves the device','It uses SMS','It\u2019s encrypted email'],a:1,
+       e:'Nothing phishable is transmitted; the private key stays on the hardware, so a fake login page captures nothing usable.'},
+      {q:'When an employee with a smart card leaves, you must:',
+       o:['Nothing \u2014 it expires eventually','Revoke the certificate (CRL/OCSP) so it can\u2019t be used','Email them','Change the CA'],a:1,
+       e:'Certificates are long-lived, so revocation is essential on departure or loss \u2014 a missed revocation is like a missed termination.'}
+    ]},
+  /* ---------------- 13.3 ---------------- */
+  { id:'13.3', num:'13.3', title:'Okta Device Assurance & device posture', minutes:10,
+    dek:'Authenticating the user isn\u2019t enough; Zero Trust also verifies the device. Okta Device Assurance enforces that only healthy, compliant devices get in.',
+    concept:`<p>Zero Trust says verify the <i>user</i> and the <i>device</i>. <b>Okta Device Assurance</b> is how Okta enforces the device half: policies that check a device\u2019s <b>security posture</b> before granting access, regardless of who the user is.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Okta Device Assurance</div>Policies that require a device to meet security criteria \u2014 e.g. <b>managed/registered</b>, <b>screen lock</b> enabled, <b>disk encryption</b> on, a <b>minimum OS version</b>, or <b>biometric</b> set \u2014 before it can access resources. Even a correctly authenticated user is blocked from a non-compliant device.</div>
+    <h3>Posture signals it checks</h3>
+    <ul>
+      <li><b>Managed / registered</b> \u2014 is the device enrolled and known (often via an MDM)?</li>
+      <li><b>Screen lock</b> and <b>biometric</b> \u2014 basic device-level protection.</li>
+      <li><b>Disk encryption</b> \u2014 data at rest is protected if the device is lost.</li>
+      <li><b>Minimum OS version</b> \u2014 patched against known vulnerabilities.</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">How it connects to MDM</div><div class="kt-term">Device Assurance + MDM (Jamf, Intune)</div>Device Assurance checks posture; an <b>MDM</b> (Mobile Device Management) like <b>Jamf</b> (Apple) or <b>Microsoft Intune</b> is what <i>manages</i> the device and supplies/enforces that posture (encryption, OS, enrollment). Okta reads the device\u2019s managed/compliant state as a signal in its policy. Together they ensure only secure, managed endpoints reach corporate resources.</div>
+    <h3>Where it fits the bigger picture</h3>
+    <p>Device Assurance plugs straight into the authentication and Conditional Access flow you already know: it\u2019s another <b>signal</b> evaluated at sign-in, and it supports <b>least privilege</b> by ensuring access only flows to trustworthy devices. A phishing-resistant credential on a compromised, unmanaged laptop is still a risk; checking the device closes that gap.</p>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the JD:</b> "configuring and monitoring Okta Device Assurance policies" and understanding "how they interface with MDM tools (Jamf, Intune) to check device posture" are listed responsibilities and bonus points. The mental model \u2014 Device Assurance checks posture, MDM manages it, Okta uses it as a sign-in signal \u2014 is exactly what those roles want you to articulate.</div></div>`,
+    example:`<p>One Device Assurance policy, four devices trying to get in. Watch posture, not identity, decide each one.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 Device Assurance in action</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#00297a"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">Device Assurance \u00b7 evaluate</div><div class="chip">DEVICE</div></div>
+    <div class="console-body"><div class="mono-out">policy: managed \u00b7 screen lock \u00b7 OS \u2265 14 \u00b7 disk encryption
+
+corp laptop   managed, locked, OS 15, encrypted   \u2192 <span style="color:#34d399">ALLOW</span>
+personal phone unmanaged, locked, OS 16, encrypted \u2192 <span style="color:#f87171">BLOCK</span> (not managed)
+old laptop    managed, locked, OS 12, encrypted    \u2192 <span style="color:#f87171">BLOCK</span> (OS below minimum)
+kiosk         managed, no lock, OS 15, not encrypted\u2192 <span style="color:#f87171">BLOCK</span> (no lock, no encryption)
+
+same user on all four \u2014 only the compliant device gets through</div></div></div>
+    <p>Identity passed every time; the <b>device</b> decided. That\u2019s the Zero Trust device pillar made concrete. In the lab you\u2019ll predict allow/block for a set of devices against a posture policy.</p></div>`,
+    lab:{ kind:'deviceassurance', id:'13.3',
+      title:'Enforce device posture',
+      objective:'A Device Assurance policy requires a managed device with screen lock, OS \u2265 14, and disk encryption. For each device, predict whether Okta <b>allows</b> or <b>blocks</b> it. All correct to pass.',
+      intro:'',
+      policy:{ requireManaged:true, requireScreenLock:true, minOsVersion:14, requireDiskEncryption:true },
+      devices:[
+        {name:'Corp MacBook (Jamf-managed)', managed:true, screenLock:true, osVersion:15, diskEncryption:true},
+        {name:'Personal phone (BYOD, unmanaged)', managed:false, screenLock:true, osVersion:16, diskEncryption:true},
+        {name:'Old field laptop', managed:true, screenLock:true, osVersion:12, diskEncryption:true},
+        {name:'Shared kiosk', managed:true, screenLock:false, osVersion:15, diskEncryption:false},
+        {name:'Intune-managed Surface', managed:true, screenLock:true, osVersion:14, diskEncryption:true}
+      ]},
+    quiz:[
+      {q:'Okta Device Assurance enforces:',
+       o:['Password length','Device security posture (managed, encrypted, OS version, lock) before granting access','Network speed','Email rules'],a:1,
+       e:'Device Assurance checks the device\u2019s posture as a sign-in signal; a non-compliant device is blocked even for a valid user.'},
+      {q:'The relationship between Device Assurance and an MDM (Jamf/Intune) is:',
+       o:['They\u2019re the same thing','MDM manages/enforces device posture; Device Assurance reads that state as a sign-in signal','MDM replaces Okta','Device Assurance manages phones directly'],a:1,
+       e:'The MDM manages the device and supplies its compliance state; Okta\u2019s Device Assurance uses it to allow or block access.'},
+      {q:'Why check the device, not just the user?',
+       o:['Users are untrustworthy','A valid credential on a compromised/unmanaged device is still a risk \u2014 Zero Trust verifies both','To slow logins','Devices pay for licenses'],a:1,
+       e:'Authenticating the user doesn\u2019t guarantee a safe endpoint; verifying device posture closes that gap, per Zero Trust.'},
+      {q:'A correctly authenticated user on an unmanaged personal phone, under a "require managed" policy, is:',
+       o:['Allowed','Blocked \u2014 the device fails the assurance policy','Made an admin','Ignored'],a:1,
+       e:'Device Assurance blocks non-compliant devices regardless of user identity; an unmanaged device fails a require-managed policy.'}
+    ]},
+  /* ---------------- 13.4 ---------------- */
+  { id:'13.4', num:'13.4', title:'Designing an authentication strategy', minutes:9,
+    dek:'Putting the pieces together: matching factor strength and device requirements to risk, the way a real IAM engineer designs sign-in policy.',
+    concept:`<p>You now have the building blocks: factor types, phishing resistance, certificates, and device posture. The engineering skill is <b>combining them by risk</b> \u2014 stronger requirements for higher-value access, lighter touch for low-risk, all expressed in policy.</p>
+    <div class="keyterm"><div class="kt-label">The design principle</div><div class="kt-term">Match assurance to risk</div>Authentication strength should scale with what\u2019s being protected. Low-risk app from a managed device? Password + push may suffice. Admin console or financial system? Require <b>phishing-resistant</b> MFA <i>and</i> a <b>compliant device</b>. This is risk-based authentication \u2014 the same risk-tiering idea from governance (Module 06) and Conditional Access (Module 09), applied to sign-in.</div>
+    <h3>The levers you now control</h3>
+    <ul>
+      <li><b>Factor strength</b> \u2014 require phishing-resistant factors for privileged access; retire SMS for anything sensitive.</li>
+      <li><b>Device posture</b> \u2014 require managed/compliant devices (Device Assurance) for corporate resources.</li>
+      <li><b>Context</b> \u2014 step up when risk is elevated (new location, impossible travel) via Conditional Access / sign-on policy.</li>
+      <li><b>Step-up authentication</b> \u2014 don\u2019t force the strongest factor on every action; demand it at the moment of higher risk (accessing the vault, changing payroll).</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Step-up authentication</div>Requiring <b>additional or stronger</b> verification only when the risk rises \u2014 e.g. normal sign-in with push, but a fresh phishing-resistant challenge before approving a wire transfer or activating an admin role. It balances security with user experience by reserving friction for the moments that warrant it.</div>
+    <h3>The balance: security vs. experience</h3>
+    <p>The art is protecting access <i>without</i> making people miserable, because painful auth drives risky workarounds. The answer is proportionality: invisible or light verification for routine low-risk access, strong phishing-resistant + device checks where it counts. A good authentication strategy is one users barely notice on the easy paths and that stands firm on the dangerous ones.</p>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>The bio line, earned:</b> "I design secure authentication systems that make it easier for users to access what they need without compromising security." That sentence <i>is</i> this lesson: matching assurance to risk, using step-up so friction lands only where needed, and combining factor strength with device posture. You can now speak to the design, not just the toggles.</div></div>`,
+    example:`<p>One organization, three access tiers, matched to the right authentication requirements. This is the design conversation in practice.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 risk-tiered authentication design</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">auth-strategy \u00b7 by risk tier</div></div>
+    <div class="console-body"><div class="mono-out"><span style="color:#34d399">TIER 1 \u2014 low risk</span>  (internal wiki, time-off tool)
+  password + push, any managed device   <span style="color:#5c6b80"># light touch</span>
+
+<span style="color:#fbbf24">TIER 2 \u2014 business apps</span>  (CRM, email)
+  password + number-matching push + managed device (Device Assurance)
+
+<span style="color:#f87171">TIER 3 \u2014 privileged / financial</span>  (admin console, payroll, the vault)
+  <span style="color:#34d399">phishing-resistant MFA (FIDO2/PIV)</span> + compliant device
+  + <span style="color:#34d399">step-up</span> re-auth at the sensitive action, + JIT/PIM elevation
+
+friction scales with risk \u2014 invisible at Tier 1, firm at Tier 3</div></div></div>
+    <p>Same building blocks, dialed up by tier. Routine work stays smooth; the crown jewels demand phishing-resistant auth on a healthy device with a step-up at the moment of action. In the lab you\u2019ll make the case for a sound authentication strategy.</p></div>`,
+    lab:{ kind:'capstone', id:'13.4',
+      title:'Design the authentication strategy',
+      scenario:'You\u2019re setting authentication policy for an organization. Select every decision that reflects sound, risk-matched design. A weak or absolutist choice fails the review.',
+      options:[
+        {t:'Require phishing-resistant MFA (FIDO2/PIV) for admin and financial system access.', good:true},
+        {t:'Use number-matching push or stronger to defeat MFA fatigue for staff.', good:true},
+        {t:'Require a managed, compliant device (Device Assurance) for corporate-resource access.', good:true},
+        {t:'Force the strongest possible factor on every single action, including the internal lunch menu.', good:false},
+        {t:'Use step-up authentication so extra friction appears only at higher-risk actions.', good:true},
+        {t:'Keep SMS OTP as the primary factor for the admin console, for convenience.', good:false},
+        {t:'Match authentication strength to the risk of what\u2019s being accessed.', good:true},
+        {t:'Combine phishing-resistant factors with device posture for privileged access.', good:true}
+      ]},
+    quiz:[
+      {q:'Risk-based authentication means:',
+       o:['Everyone uses the same factor','Authentication strength scales with the risk of what\u2019s being accessed','No authentication for anyone','Only passwords'],a:1,
+       e:'Higher-value access gets stronger requirements (phishing-resistant + device checks); low-risk access stays light-touch.'},
+      {q:'Step-up authentication is:',
+       o:['Logging in twice always','Requiring stronger/extra verification only when risk rises (e.g. a sensitive action)','Disabling MFA','A type of password'],a:1,
+       e:'Step-up reserves the strongest verification for the moments that warrant it, balancing security and user experience.'},
+      {q:'Forcing the strongest factor on every action, even trivial ones, is a poor design because:',
+       o:['It\u2019s too secure','Excessive friction drives risky workarounds and hurts adoption without matching real risk','It\u2019s illegal','It\u2019s too cheap'],a:1,
+       e:'Proportionality matters: unnecessary friction frustrates users and can backfire. Match assurance to risk.'},
+      {q:'For the most sensitive access, the strongest design combines:',
+       o:['SMS + any device','Phishing-resistant MFA + a compliant device + step-up at the sensitive action','Password only','A longer username'],a:1,
+       e:'Privileged access warrants phishing-resistant factors on a healthy, managed device, with step-up re-auth at the point of high-risk action.'}
+    ]}
   ]}
 ];
 
@@ -4254,6 +5073,288 @@ function labAssertion(mount, lab, done){
     if(r.valid)done();
   };
 }
+
+/* =====================================================================
+   LAB RENDERERS — Part 5 (automation, auth deep-dive, components,
+   access-risk, OIG)
+   ===================================================================== */
+
+/* ---- Script step-ordering lab (Module 12) ----
+   Learner reorders code/pipeline steps; supports a code preview per step. */
+function labScriptOrder(mount, lab, done){
+  let steps = lab.steps.map((s,i)=>({...s,_k:i})); // working order
+  // shuffle deterministically from given start order if provided
+  if(lab.start) steps = lab.start.map(i=>({...lab.steps[i],_k:i}));
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#f59e0b"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">${lab.lang||'script'} \u00b7 ${lab.titleBar||'order the steps'}</div><div class="chip">${(lab.lang||'').toUpperCase().includes('PYTHON')?'PYTHON':(lab.lang||'').toUpperCase().includes('POWERSHELL')?'POWERSHELL':'AUTOMATION'}</div></div>
+      <div class="console-body"><div class="mono-out" id="soPreview" style="font-size:11.5px;white-space:pre-wrap"></div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">Use the arrows to put the automation steps in the correct execution order, then run it.</p>
+    <div id="soList"></div>
+    <button class="btn" id="soCheck" style="margin-top:12px">Run script</button><div class="result" id="soRes"></div>`;
+  function paint(){
+    const L=$('#soList',mount);L.innerHTML='';
+    steps.forEach((s,idx)=>{
+      const row=el(`<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;margin-bottom:6px">
+        <span style="font-family:var(--mono);color:var(--cyan);font-size:11px">${idx+1}</span>
+        <span style="flex:1;font-size:13px"><code>${s.label}</code></span>
+        <span style="display:flex;gap:4px">
+          <button class="btn ghost sm soup" data-i="${idx}" ${idx===0?'disabled style=opacity:.3':''}>\u2191</button>
+          <button class="btn ghost sm sodn" data-i="${idx}" ${idx===steps.length-1?'disabled style=opacity:.3':''}>\u2193</button>
+        </span></div>`);
+      L.appendChild(row);
+    });
+    $$('.soup',mount).forEach(b=>b.onclick=()=>{const i=+b.dataset.i;if(i>0){[steps[i-1],steps[i]]=[steps[i],steps[i-1]];paint();}});
+    $$('.sodn',mount).forEach(b=>b.onclick=()=>{const i=+b.dataset.i;if(i<steps.length-1){[steps[i+1],steps[i]]=[steps[i],steps[i+1]];paint();}});
+    $('#soPreview',mount).textContent = steps.map(s=>s.code).join('\n');
+  }
+  paint();
+  $('#soCheck',mount).onclick=()=>{
+    const order = steps.map(s=>s._k);
+    const r = checkScriptOrder(order, lab.solution);
+    const res=$('#soRes',mount);res.className='result show '+(r.ok?'pass':'fail');
+    res.innerHTML = r.ok
+      ? '<div class="rv">\u2713 Pipeline runs correctly \u2014 steps are in the right order</div>'
+      : `<div class="rv">\u2717 The script fails at step ${r.firstWrong+1} \u2014 that step can\u2019t run yet. Re-order and try again.</div>`;
+    if(r.ok)done();
+  };
+}
+
+/* ---- REST request builder (Module 12) ----
+   Pick the HTTP method + expected status for each IAM API operation. */
+function labRest(mount, lab, done){
+  const picks={};
+  const methods=['GET','POST','PUT','DELETE'];
+  const statuses=['200','201','204','400','401','403','404'];
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">${lab.api||'Okta'} REST API \u00b7 build the calls</div><div class="chip">API</div></div>
+      <div class="console-body"><div class="mono-out" style="font-size:11.5px">base: ${lab.base||'https://your-org.okta.com/api/v1'}</div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">For each operation, choose the correct HTTP method and the status code a success returns. All correct to pass.</p>
+    <table class="dt" id="restTbl"><tr><th>Operation</th><th>Endpoint</th><th>Method</th><th>Success status</th></tr></table>
+    <button class="btn" id="restCheck" style="margin-top:12px">Send requests</button><div class="result" id="restRes"></div>`;
+  const tbl=$('#restTbl',mount);
+  lab.ops.forEach((op,i)=>{
+    const row=el(`<tr><td>${op.goal}</td><td><code>${op.path}</code></td>
+      <td><select class="rmeth" data-i="${i}"><option value="">\u2014</option>${methods.map(m=>`<option>${m}</option>`).join('')}</select></td>
+      <td><select class="rstat" data-i="${i}"><option value="">\u2014</option>${statuses.map(s=>`<option>${s}</option>`).join('')}</select></td></tr>`);
+    tbl.appendChild(row);
+  });
+  $$('.rmeth',mount).forEach(s=>s.onchange=()=>{picks[+s.dataset.i]=picks[+s.dataset.i]||{};picks[+s.dataset.i].method=s.value;});
+  $$('.rstat',mount).forEach(s=>s.onchange=()=>{picks[+s.dataset.i]=picks[+s.dataset.i]||{};picks[+s.dataset.i].status=s.value;});
+  $('#restCheck',mount).onclick=()=>{
+    let allRight=true;const rows=[];
+    lab.ops.forEach((op,i)=>{
+      const p=picks[i]||{};const r=evalRestRequest(op,p);if(!r.ok)allRight=false;
+      rows.push(`<li><span class="mk">${r.ok?'\u2713':'\u2717'}</span><span>${op.method} ${op.path} \u2192 ${op.expectStatus} ${r.ok?'':'<span style="color:#f87171">('+r.why+')</span>'}</span></li>`);
+    });
+    const res=$('#restRes',mount);res.className='result show '+(allRight?'pass':'fail');
+    res.innerHTML=`<div class="rv">${allRight?'\u2713 All API calls correct':'\u2717 Some calls are off \u2014 check method &amp; status'}</div><ul>${rows.join('')}</ul>`;
+    if(allRight)done();
+  };
+}
+
+/* ---- Okta Workflows visual flow lab (Module 12) ----
+   Order flow "cards" (trigger -> actions) to build a lifecycle automation. */
+function labFlow(mount, lab, done){
+  let cards = lab.start ? lab.start.map(i=>({...lab.cards[i],_k:i})) : lab.cards.map((c,i)=>({...c,_k:i}));
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#00297a"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">Okta Workflows \u00b7 ${lab.flowName||'lifecycle flow'}</div><div class="chip">NO-CODE</div></div>
+      <div class="console-body"><div id="flowCanvas"></div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">Order the flow cards so the automation runs correctly: it must start with the <b>trigger</b> (the event), then the actions in logical order. Arrange, then run the flow.</p>
+    <button class="btn" id="flowCheck">Run flow</button><div class="result" id="flowRes"></div>`;
+  function paint(){
+    const C=$('#flowCanvas',mount);C.innerHTML='';
+    cards.forEach((c,idx)=>{
+      const isTrigger=c.type==='trigger';
+      const node=el(`<div style="display:flex;align-items:center;gap:10px;margin-bottom:${idx<cards.length-1?'4px':'0'}">
+        <div style="flex:1;display:flex;align-items:center;gap:10px;padding:11px 13px;border-radius:10px;border:1px solid ${isTrigger?'#0e6b7e':'var(--line)'};background:${isTrigger?'var(--cyan-deep)':'var(--panel-2)'}">
+          <span style="font-family:var(--mono);font-size:10px;letter-spacing:1px;color:${isTrigger?'var(--cyan)':'var(--ink-dim)'}">${isTrigger?'TRIGGER':'ACTION'}</span>
+          <span style="font-size:13px">${c.label}</span>
+          <span style="margin-left:auto;display:flex;gap:4px">
+            <button class="btn ghost sm fup" data-i="${idx}" ${idx===0?'disabled style=opacity:.3':''}>\u2191</button>
+            <button class="btn ghost sm fdn" data-i="${idx}" ${idx===cards.length-1?'disabled style=opacity:.3':''}>\u2193</button>
+          </span>
+        </div></div>`);
+      C.appendChild(node);
+      if(idx<cards.length-1) C.appendChild(el('<div style="text-align:center;color:var(--ink-dim);font-size:14px;margin:0 0 4px">\u2193</div>'));
+    });
+    $$('.fup',mount).forEach(b=>b.onclick=()=>{const i=+b.dataset.i;if(i>0){[cards[i-1],cards[i]]=[cards[i],cards[i-1]];paint();}});
+    $$('.fdn',mount).forEach(b=>b.onclick=()=>{const i=+b.dataset.i;if(i<cards.length-1){[cards[i+1],cards[i]]=[cards[i],cards[i+1]];paint();}});
+  }
+  paint();
+  $('#flowCheck',mount).onclick=()=>{
+    const order=cards.map(c=>c._k);
+    const r=checkScriptOrder(order, lab.solution);
+    const res=$('#flowRes',mount);res.className='result show '+(r.ok?'pass':'fail');
+    res.innerHTML = r.ok
+      ? '<div class="rv">\u2713 Flow runs end to end \u2014 trigger fires, actions execute in order</div>'
+      : (cards[0].type!=='trigger'
+          ? '<div class="rv">\u2717 A Workflow must begin with its trigger (the event). Move the trigger card to the top.</div>'
+          : `<div class="rv">\u2717 Action ${r.firstWrong+1} runs out of order \u2014 it depends on a step that hasn\u2019t happened yet.</div>`);
+    if(r.ok)done();
+  };
+}
+
+/* ---- Certificate-based auth inspector (Module 13) ---- */
+function labCertAuth(mount, lab, done){
+  const ctx=lab.ctx; const cert=JSON.parse(JSON.stringify(lab.start));
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">client certificate \u00b7 authentication</div><div class="chip">X.509</div></div>
+      <div class="console-body"><div id="caXml" class="mono-out" style="font-size:11px;line-height:1.7"></div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">A client presented this certificate for authentication, but it\u2019s being rejected. Fix each problem, then validate. Certificate-based auth is phishing-resistant precisely because these checks are strict.</p>
+    <div class="row" id="caCtrls" style="gap:7px;flex-wrap:wrap"></div>
+    <button class="btn" id="caCheck" style="margin-top:12px">Validate certificate</button><div id="caOut" style="margin-top:10px"></div><div class="result" id="caRes"></div>`;
+  function paint(){
+    $('#caXml',mount).innerHTML=
+`Subject : <span style="color:${cert.subject?'#34d399':'#f87171'}">${cert.subject||'(empty)'}</span>
+Issuer  : <span style="color:${ctx.trustedCAs.includes(cert.issuer)?'#34d399':'#f87171'}">${cert.issuer}</span>
+Validity: <span style="color:${(ctx.now>=cert.notBefore&&ctx.now<cert.notOnOrAfter)?'#34d399':'#f87171'}">${cert.notBefore}\u2026${cert.notOnOrAfter} (now=${ctx.now})</span>
+Revoked : <span style="color:${cert.revoked?'#f87171':'#34d399'}">${cert.revoked?'YES (on CRL)':'no'}</span>
+EKU     : <span style="color:${cert.keyUsageClientAuth?'#34d399':'#f87171'}">${cert.keyUsageClientAuth?'clientAuth':'(missing clientAuth)'}</span>
+Chain   : <span style="color:${cert.chainsToTrustedCA?'#34d399':'#f87171'}">${cert.chainsToTrustedCA?'chains to trusted CA':'broken chain'}</span>`;
+  }
+  const ctrls=[
+    ['issuer','Re-issue from trusted CA',()=>{cert.issuer='Corp Issuing CA';cert.chainsToTrustedCA=true;}],
+    ['time','Renew (fix validity)',()=>{cert.notBefore=ctx.now-100;cert.notOnOrAfter=ctx.now+100;}],
+    ['revoke','Issue fresh (clear revocation)',()=>{cert.revoked=false;}],
+    ['eku','Add clientAuth EKU',()=>{cert.keyUsageClientAuth=true;}],
+    ['subject','Bind subject to user',()=>{cert.subject='amy@corp';}]
+  ];
+  const C=$('#caCtrls',mount);
+  ctrls.forEach(([k,label,fn])=>{const b=el(`<button class="btn ghost sm" data-k="${k}">${label}</button>`);
+    b.onclick=()=>{fn();b.style.background='var(--green-deep)';b.style.borderColor='var(--green)';paint();};C.appendChild(b);});
+  paint();
+  $('#caCheck',mount).onclick=()=>{
+    const r=validateCert(cert,ctx);
+    $('#caOut',mount).innerHTML=`<ul class="trace">${r.checks.map(c=>`<li class="${c.ok?'good':'bad'}"><span class="mk">${c.ok?'\u2713':'\u2717'}</span> ${c.label} \u2014 <span style="color:var(--ink-dim)">${c.detail}</span></li>`).join('')}</ul>`;
+    const res=$('#caRes',mount);res.className='result show '+(r.valid?'pass':'fail');
+    res.innerHTML=`<div class="rv">${r.valid?'\u2713 '+r.verdict:'\u2717 '+r.verdict}</div>`;
+    if(r.valid)done();
+  };
+}
+
+/* ---- Device Assurance console (Module 13) ---- */
+function labDeviceAssurance(mount, lab, done){
+  const policy=lab.policy;
+  const scenarios=lab.devices;
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#00297a"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">Okta Device Assurance \u00b7 policy check</div><div class="chip">DEVICE</div></div>
+      <div class="console-body"><div class="mono-out" style="font-size:11.5px">policy requires: ${[policy.requireManaged?'managed device':'',policy.requireScreenLock?'screen lock':'',policy.minOsVersion?('OS \u2265 '+policy.minOsVersion):'',policy.requireDiskEncryption?'disk encryption':'',policy.requireBiometric?'biometric':''].filter(Boolean).join(' \u00b7 ')}</div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">For each device trying to access corporate resources, predict whether Device Assurance <b>allows</b> or <b>blocks</b> it. Get all correct to pass.</p>
+    <div id="daList"></div>
+    <button class="btn" id="daCheck" style="margin-top:12px">Evaluate devices</button><div class="result" id="daRes"></div>`;
+  const picks={};
+  const L=$('#daList',mount);
+  scenarios.forEach((dv,i)=>{
+    const desc=[dv.managed?'managed':'unmanaged',dv.screenLock?'lock on':'no lock','OS '+dv.osVersion,dv.diskEncryption?'encrypted':'not encrypted',dv.biometric?'biometric':'no biometric'].join(' \u00b7 ');
+    const row=el(`<div class="quiz-card" style="padding:12px 14px;margin:8px 0"><div style="font-size:13px;margin-bottom:8px"><b>${dv.name}</b> \u2014 <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">${desc}</span></div>
+      <button class="btn ghost sm daa" data-i="${i}" data-v="allow">allow</button>
+      <button class="btn ghost sm dab" data-i="${i}" data-v="block">block</button>
+      <span class="datag" data-i="${i}" style="font-family:var(--mono);font-size:11px;margin-left:6px"></span></div>`);
+    L.appendChild(row);
+  });
+  $$('.daa',mount).forEach(b=>b.onclick=()=>{picks[+b.dataset.i]='allow';mount.querySelector(`.datag[data-i="${b.dataset.i}"]`).innerHTML='<span style="color:#34d399">allow</span>';});
+  $$('.dab',mount).forEach(b=>b.onclick=()=>{picks[+b.dataset.i]='block';mount.querySelector(`.datag[data-i="${b.dataset.i}"]`).innerHTML='<span style="color:#f87171">block</span>';});
+  $('#daCheck',mount).onclick=()=>{
+    let allRight=true;const rows=[];
+    scenarios.forEach((dv,i)=>{
+      const r=evalDeviceAssurance(policy,dv);const want=r.allow?'allow':'block';const ok=picks[i]===want;if(!ok)allRight=false;
+      rows.push(`<li><span class="mk">${ok?'\u2713':'\u2717'}</span><span>${dv.name}: ${want.toUpperCase()}${r.fails.length?' ('+r.fails[0]+')':''}</span></li>`);
+    });
+    const res=$('#daRes',mount);res.className='result show '+(allRight?'pass':'fail');
+    res.innerHTML=`<div class="rv">${allRight?'\u2713 Correct \u2014 only compliant devices get through':'\u2717 Some calls are off \u2014 re-check the posture requirements'}</div><ul>${rows.join('')}</ul>`;
+    if(allRight)done();
+  };
+}
+
+/* ---- CyberArk component matching (Module 07 strengthen) ---- */
+function labComponents(mount, lab, done){
+  const picks={};
+  const comps=['vault','cpm','psm','pvwa'];
+  const compLabels={vault:'Digital Vault',cpm:'CPM',psm:'PSM',pvwa:'PVWA'};
+  mount.innerHTML=`
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 10px">Match each task to the CyberArk component that performs it: <b>Vault</b> (stores), <b>CPM</b> (rotates), <b>PSM</b> (isolates &amp; records sessions), or <b>PVWA</b> (the web access UI).</p>
+    <div id="compList"></div>
+    <button class="btn" id="compCheck" style="margin-top:12px">Check mapping</button><div class="result" id="compRes"></div>`;
+  const L=$('#compList',mount);
+  lab.tasks.forEach((t,i)=>{
+    const row=el(`<div class="quiz-card" style="padding:12px 14px;margin:8px 0"><div style="font-size:13px;margin-bottom:8px">${t.task}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${comps.map(c=>`<button class="btn ghost sm compbtn" data-i="${i}" data-c="${c}">${compLabels[c]}</button>`).join('')}</div>
+      <span class="comptag" data-i="${i}" style="font-family:var(--mono);font-size:11px"></span></div>`);
+    L.appendChild(row);
+  });
+  $$('.compbtn',mount).forEach(b=>b.onclick=()=>{const i=+b.dataset.i;picks[i]=b.dataset.c;
+    mount.querySelectorAll(`.compbtn[data-i="${i}"]`).forEach(x=>{x.style.background='';x.style.borderColor='';});
+    b.style.background='var(--cyan-deep)';b.style.borderColor='var(--cyan)';
+    mount.querySelector(`.comptag[data-i="${i}"]`).innerHTML=' \u2192 '+compLabels[b.dataset.c];});
+  $('#compCheck',mount).onclick=()=>{
+    let allRight=true;const rows=[];
+    lab.tasks.forEach((t,i)=>{const ok=picks[i]===t.component;if(!ok)allRight=false;
+      const info=cyberArkComponentFor(t.component);
+      rows.push(`<li><span class="mk">${ok?'\u2713':'\u2717'}</span><span>${compLabels[t.component]}: ${info.role}</span></li>`);
+    });
+    const res=$('#compRes',mount);res.className='result show '+(allRight?'pass':'fail');
+    res.innerHTML=`<div class="rv">${allRight?'\u2713 Correct \u2014 you know the CyberArk architecture':'\u2717 Some are off \u2014 review which component does what'}</div><ul>${rows.join('')}</ul>`;
+    if(allRight)done();
+  };
+}
+
+/* ---- Access-risk audit console (Module 06 strengthen) ---- */
+function labAccessRisk(mount, lab, done){
+  const picks={};
+  mount.innerHTML=`
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 10px">You\u2019re auditing AD / Okta Universal Directory accounts for risk. For each account, tag the correct action: <b>Keep</b> (healthy), <b>Review</b> (dormant), or <b>Remediate</b> (high/critical \u2014 missed termination, orphaned, or privileged-without-MFA). All correct to pass.</p>
+    <table class="dt" id="arTbl2"><tr><th>Account</th><th>Signals</th><th>Action</th></tr></table>
+    <button class="btn" id="arCheck2" style="margin-top:12px">Submit audit</button><div class="result" id="arRes2"></div>`;
+  const tbl=$('#arTbl2',mount);
+  lab.accounts.forEach((a,i)=>{
+    const sig=[a.terminatedInHR?'HR-terminated':'',a.status==='active'?'active':'disabled',a.orphaned?'orphaned':'',a.lastLoginDays!=null?('login '+a.lastLoginDays+'d ago'):'',a.isAdmin?'ADMIN':'',a.isAdmin?(a.mfaEnrolled?'MFA':'no MFA'):''].filter(Boolean).join(' \u00b7 ');
+    const row=el(`<tr><td><b>${a.name}</b></td><td><span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">${sig}</span></td>
+      <td style="white-space:nowrap"><button class="btn ghost sm ark2" data-i="${i}" data-v="keep">keep</button>
+      <button class="btn ghost sm arv2" data-i="${i}" data-v="review">review</button>
+      <button class="btn ghost sm arx2" data-i="${i}" data-v="remediate">remediate</button>
+      <span class="artag2" data-i="${i}" style="font-family:var(--mono);font-size:11px"></span></td></tr>`);
+    tbl.appendChild(row);
+  });
+  function tag(i,v,color){picks[i]=v;mount.querySelector(`.artag2[data-i="${i}"]`).innerHTML=` <span style="color:${color}">${v}</span>`;}
+  $$('.ark2',mount).forEach(b=>b.onclick=()=>tag(+b.dataset.i,'keep','#34d399'));
+  $$('.arv2',mount).forEach(b=>b.onclick=()=>tag(+b.dataset.i,'review','#fbbf24'));
+  $$('.arx2',mount).forEach(b=>b.onclick=()=>tag(+b.dataset.i,'remediate','#f87171'));
+  $('#arCheck2',mount).onclick=()=>{
+    let allRight=true;const rows=[];
+    lab.accounts.forEach((a,i)=>{
+      const r=assessAccessRisk(a);
+      const want = (r.risk==='critical'||r.risk==='high')?'remediate':(r.risk==='medium')?'review':'keep';
+      const ok=picks[i]===want;if(!ok)allRight=false;
+      rows.push(`<li><span class="mk">${ok?'\u2713':'\u2717'}</span><span>${a.name}: <b>${want}</b> \u2014 ${r.action}</span></li>`);
+    });
+    const res=$('#arRes2',mount);res.className='result show '+(allRight?'pass':'fail');
+    res.innerHTML=`<div class="rv">${allRight?'\u2713 Sound audit \u2014 risks correctly triaged':'\u2717 Some calls are off \u2014 re-check the risk signals'}</div><ul>${rows.join('')}</ul>`;
+    if(allRight)done();
+  };
+}
+
+/* ---- OIG access request console (Module 06 strengthen) ---- */
+function labOIG(mount, lab, done){
+  const policy=lab.policy;
+  const req={justification:'', approved:false, requesterHasConflict:lab.requesterHasConflict||false};
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#00297a"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">Okta Identity Governance \u00b7 access request</div><div class="chip">OIG</div></div>
+      <div class="console-body"><div class="mono-out" style="font-size:11.5px">requesting: <b style="color:#22d3ee">${lab.resource||'Salesforce \u2013 Admin'}</b>
+requires: ${[policy.requiresApproval?('approval ('+(policy.approverRole||'manager')+')'):'',policy.requiresJustification?'justification':'',policy.sodConflict?'SoD check':'',policy.autoExpiresDays?('auto-expiry '+policy.autoExpiresDays+'d'):''].filter(Boolean).join(' \u00b7 ')}
+${req.requesterHasConflict?'<span style="color:#fbbf24">\u26a0 requester already holds a conflicting entitlement</span>':''}</div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">Submit this access request through the OIG workflow. Provide what the policy needs, then submit.</p>
+    <div class="row" style="gap:8px"><button class="btn ghost sm" id="oigApprove">Approver: approve</button></div>
+    <label class="fld-label">Business justification</label><input type="text" id="oigJust" placeholder="why is this access needed?">
+    <button class="btn" id="oigGo" style="margin-top:10px">Submit request</button><div id="oigOut" style="margin-top:10px"></div><div class="result" id="oigRes"></div>`;
+  $('#oigApprove',mount).onclick=()=>{req.approved=true;const b=$('#oigApprove',mount);b.textContent='\u2713 Approved';b.style.background='var(--green-deep)';b.style.borderColor='var(--green)';};
+  $('#oigGo',mount).onclick=()=>{
+    req.justification=$('#oigJust',mount).value;
+    const r=oigAccessRequest(policy,req);const out=$('#oigOut',mount);
+    if(r.granted){out.innerHTML=`<div class="decision allow"><div class="verdict">\u2713 Access granted</div><div class="why">${r.note}</div></div>`;
+      const res=$('#oigRes',mount);res.className='result show pass';res.innerHTML='<div class="rv">\u2713 Request fulfilled through governed, audited workflow</div>';done();}
+    else{out.innerHTML=`<div class="decision deny"><div class="verdict">\u2715 Not granted yet</div><ul class="trace">${r.blockers.map(b=>`<li class="bad">${b}</li>`).join('')}</ul></div>`;}
+  };
+}
 /* =====================================================================
    VIEW LAYER — rail, lesson player, labs, quizzes
    ===================================================================== */
@@ -4494,7 +5595,8 @@ function renderLab(lesson){
   ({classify:labClassify,leastpriv:labLeastPriv,saml:labSaml,jwt:labJwt,quizonly:labQuizOnly,
     rbac:labRbac,abac:labAbac,jml:labJml,okta:labOkta,sod:labSod,cert:labCert,vault:labVault,pam:labPam,capstone:labCapstone,
     caconsole:labCAConsole,pim:labPIMConsole,accessreview:labAccessReview,ssotriage:labSSOTriage,vaultfleet:labVaultFleet,jit:labJITConsole,
-    hrispipeline:labHrisPipeline,attrmap:labAttrMap,assertion:labAssertion})[lab.kind](mount,lab,done);
+    hrispipeline:labHrisPipeline,attrmap:labAttrMap,assertion:labAssertion,
+    scriptorder:labScriptOrder,rest:labRest,flow:labFlow,certauth:labCertAuth,deviceassurance:labDeviceAssurance,components:labComponents,accessrisk:labAccessRisk,oig:labOIG})[lab.kind](mount,lab,done);
 }
 
 /* -- classify lab (2-way or 3-way buttons) -- */
