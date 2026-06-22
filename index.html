@@ -3,8 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IAM Academy | Denise Banks</title>
-  <link rel="icon" type="image/png" href="favicon.svg">
+<title>IAM Academy by Denise — Learn Identity & Access Engineering</title>
 <style>
   /* ============ DESIGN SYSTEM ============
      Identity: an enterprise security console you learn inside of.
@@ -37,7 +36,15 @@
 
   /* ---------- top bar ---------- */
   .topbar{display:flex;align-items:center;gap:14px;padding:0 18px;height:54px;background:linear-gradient(180deg,#0d131e,#0a0e14);border-bottom:1px solid var(--line);flex-shrink:0;z-index:30}
-  .logo{display:flex;align-items:center;gap:11px;font-family:var(--disp);font-weight:700;font-size:16px;letter-spacing:-.3px}
+  .logo{display:flex;align-items:center;gap:11px;font-family:var(--disp);font-weight:700;font-size:16px;letter-spacing:-.3px;cursor:pointer}
+  .logo:hover{opacity:.85}
+  .nav-home{font-family:var(--disp);font-weight:600;font-size:13px;color:var(--cyan);background:var(--cyan-deep);border:1px solid #0e6b7e;border-radius:8px;padding:6px 13px;cursor:pointer;transition:.15s;white-space:nowrap}
+  .nav-home:hover{background:#0c3a44;border-color:var(--cyan)}
+  .nav-home:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  .sound-btn{font-family:var(--disp);font-weight:600;font-size:12px;color:var(--cyan);background:none;border:1px solid var(--line);border-radius:8px;padding:6px 11px;cursor:pointer;transition:.15s;white-space:nowrap}
+  .sound-btn:hover{border-color:var(--cyan)}
+  .sound-btn.muted{color:var(--ink-dim)}
+  .sound-btn:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
   .logo .glyph{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;background:radial-gradient(circle at 30% 25%,#22d3ee,#0e7490 70%);box-shadow:0 0 0 1px #0891b233,0 4px 14px #22d3ee22;position:relative}
   .logo .glyph::after{content:"";position:absolute;width:11px;height:11px;border:2px solid #06222a;border-radius:50%;border-bottom-color:transparent;transform:rotate(45deg)}
   .logo small{display:block;font-family:var(--sans);font-weight:500;font-size:9.5px;letter-spacing:1.6px;color:var(--ink-faint);text-transform:uppercase;margin-top:-2px}
@@ -303,6 +310,7 @@
   .codeblock pre{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12px;line-height:1.65;color:var(--ink);overflow-x:auto;white-space:pre}
   .about-actions{display:flex;gap:10px;margin-top:20px;flex-wrap:wrap}
   @media (max-width:680px){.about-card{flex-direction:column;gap:14px}.about-h1{font-size:27px}}
+  @media (max-width:720px){.logo small{display:none}.nav-home{font-size:0;padding:7px 10px}.nav-home::before{content:'⌂';font-size:15px}.sound-btn{font-size:0;padding:7px 10px}.sound-btn::before{content:'♪';font-size:14px}.stat.xp-wrap{display:none}}
 
   table.dt{width:100%;border-collapse:collapse;font-size:12.5px;margin:14px 0}
   table.dt th,table.dt td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
@@ -330,7 +338,9 @@
 <body>
 
 <div class="topbar">
-  <div class="logo"><div class="glyph"></div><div>IAM Academy<small>Identity &amp; Access Engineering</small></div></div>
+  <div class="logo" id="homeLogo" title="Back to curriculum"><div class="glyph"></div><div>IAM Academy<small>Identity &amp; Access Engineering</small></div></div>
+  <button class="nav-home" id="navHome" title="Back to the curriculum overview">⌂ Curriculum</button>
+  <button class="sound-btn" id="soundBtn" title="Sound" aria-pressed="true">♪ Sound</button>
   <div class="spacer"></div>
   <div class="stat" title="Lessons completed"><span>✓</span> <b id="doneCount">0</b>/<span id="totalCount">0</span> lessons</div>
   <div class="stat"><span class="lvl">★</span> Level <b class="lvl" id="levelNum">1</b></div>
@@ -356,6 +366,42 @@
   <div><div class="tt" id="toastTitle">Badge earned</div><div class="ts" id="toastSub"></div></div>
 </div>
 <script>
+
+/* =====================================================================
+   SOUND — synthesized audio cues (Web Audio API, no external files).
+   On by default; user can mute via the topbar. Preference persists.
+   ===================================================================== */
+const SOUND = (function(){
+  let enabled = true;
+  let ctx = null;
+  // restore saved preference
+  try{ const v=localStorage.getItem('iam_sound'); if(v==='off') enabled=false; }catch(e){}
+  function ac(){ if(!ctx){ try{ ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ ctx=null; } } return ctx; }
+  function tone(freq, start, dur, type, gain){
+    const a=ac(); if(!a) return;
+    const o=a.createOscillator(), g=a.createGain();
+    o.type=type||'sine'; o.frequency.value=freq;
+    o.connect(g); g.connect(a.destination);
+    const t=a.currentTime+start;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain||0.12, t+0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+    o.start(t); o.stop(t+dur+0.02);
+  }
+  return {
+    isOn(){ return enabled; },
+    set(on){ enabled=!!on; try{ localStorage.setItem('iam_sound', enabled?'on':'off'); }catch(e){} },
+    toggle(){ this.set(!enabled); return enabled; },
+    // gentle two-note rising chime
+    success(){ if(!enabled) return; const a=ac(); if(a&&a.state==='suspended')a.resume(); tone(660,0,0.16,'sine',0.10); tone(990,0.10,0.22,'sine',0.10); },
+    // soft low double-blip (not harsh)
+    error(){ if(!enabled) return; const a=ac(); if(a&&a.state==='suspended')a.resume(); tone(300,0,0.12,'triangle',0.09); tone(240,0.12,0.16,'triangle',0.09); },
+    // tiny tick for completing a step/lesson
+    tick(){ if(!enabled) return; const a=ac(); if(a&&a.state==='suspended')a.resume(); tone(880,0,0.07,'sine',0.06); },
+    // celebratory arpeggio for finishing a module
+    fanfare(){ if(!enabled) return; const a=ac(); if(a&&a.state==='suspended')a.resume(); [523,659,784,1047].forEach((f,i)=>tone(f,i*0.10,0.28,'sine',0.10)); }
+  };
+})();
 /* =====================================================================
    IAM ACADEMY — core runtime
    ===================================================================== */
@@ -420,7 +466,9 @@ function refreshProgressUI(){
 let TOAST_T;
 function toast(icon,title,sub){const t=$('#toast');$('#toastIcon').textContent=icon;$('#toastTitle').textContent=title;$('#toastSub').textContent=sub||'';
   t.classList.add('show');clearTimeout(TOAST_T);TOAST_T=setTimeout(()=>t.classList.remove('show'),3400);}
-function earnBadge(id,icon,title,sub){if(STATE.badges.has(id))return;STATE.badges.add(id);saveState();toast(icon,title,sub);}
+function earnBadge(id,icon,title,sub){if(STATE.badges.has(id))return;STATE.badges.add(id);saveState();toast(icon,title,sub);
+  try{ if(typeof SOUND!=='undefined'){ if(icon==='🏆') SOUND.fanfare(); else SOUND.success(); } }catch(e){}
+}
 
 /* =====================================================================
    ENGINES used by worked examples & labs
@@ -1077,6 +1125,102 @@ if(typeof module!=='undefined'&&module.exports){
   A('oig sod blocks', !oigAccessRequest({sodConflict:true},{requesterHasConflict:true}).granted);
   A('oig pending approval blocks', !oigAccessRequest({requiresApproval:true,approverRole:'Mgr'},{approved:false}).granted);
   console.log('engines5 tests done');
+}
+
+/* =====================================================================
+   ENGINES — Part 6 (devices/MDM/endpoint trust, passwordless, Entra SSO)
+   Verified against Microsoft Intune/Entra and Jamf/Okta documentation.
+   ===================================================================== */
+
+/* ---- MDM compliance gate (Module 15) ----
+   Given an MDM compliance policy and a device's enrollment/posture, decide
+   whether the device is COMPLIANT and therefore allowed by device-based CA. */
+function mdmComplianceCheck(policy, device){
+  // policy: {requireEnrolled, requireEncryption, requireOsMin, requireScreenLock, requireSupervised(mac/ios)}
+  // device: {enrolled, encryption, osVersion, screenLock, supervised, platform}
+  const fails=[];
+  if(policy.requireEnrolled && !device.enrolled) fails.push('not enrolled in MDM');
+  if(policy.requireEncryption && !device.encryption) fails.push('disk encryption off (FileVault/BitLocker)');
+  if(policy.requireOsMin!=null && device.osVersion < policy.requireOsMin) fails.push('OS '+device.osVersion+' below minimum '+policy.requireOsMin);
+  if(policy.requireScreenLock && !device.screenLock) fails.push('no screen lock/passcode');
+  if(policy.requireSupervised && !device.supervised) fails.push('device not supervised');
+  return {compliant: fails.length===0, fails,
+    verdict: fails.length===0?'Compliant \u2014 device-based access permitted.':'Non-compliant \u2014 blocked until remediated.'};
+}
+
+/* ---- macOS access-control mapping (Module 15) ----
+   Map a macOS security capability to what enforces it (so learners know the
+   Mac stack, not just Windows). */
+const MACOS_CONTROLS = {
+  'filevault':{label:'FileVault', role:'Full-disk encryption \u2014 protects data at rest; enforced/escrowed via MDM.'},
+  'gatekeeper':{label:'Gatekeeper', role:'Blocks unsigned/untrusted apps from running.'},
+  'xprotect':{label:'XProtect', role:'Built-in malware signature scanning.'},
+  'tcc':{label:'TCC (Privacy)', role:'Controls app access to camera, mic, files; managed via MDM PPPC profiles.'},
+  'platformsso':{label:'Platform SSO', role:'Ties macOS login to the IdP (Okta/Entra) so the Mac password = the cloud identity.'},
+  'mdmprofile':{label:'MDM Config Profile', role:'How Jamf/Intune push settings, restrictions, and compliance to the Mac.'}
+};
+function macControlFor(key){ return MACOS_CONTROLS[key]||null; }
+
+/* ---- passwordless factor classification (Module 16) ----
+   Decide whether an authenticator is TRUE passwordless + phishing-resistant. */
+const PASSWORDLESS_FACTORS = {
+  'passkey_fido2':{label:'FIDO2 passkey / security key', passwordless:true, phishResistant:true, note:'Public-key, origin-bound. Gold standard.'},
+  'okta_fastpass':{label:'Okta FastPass', passwordless:true, phishResistant:true, note:'Device-bound, origin-checked, no password.'},
+  'windows_hello':{label:'Windows Hello for Business', passwordless:true, phishResistant:true, note:'TPM-bound biometric/PIN, asymmetric keys.'},
+  'platform_passkey':{label:'Platform passkey (Face/Touch ID)', passwordless:true, phishResistant:true, note:'Synced/device passkey via WebAuthn.'},
+  'magic_link':{label:'Email magic link', passwordless:true, phishResistant:false, note:'No password, but phishable/interceptable \u2014 not phishing-resistant.'},
+  'sms_otp':{label:'SMS one-time code', passwordless:false, phishResistant:false, note:'Often a second factor; alone it\u2019s weak and phishable, not true passwordless MFA.'},
+  'totp':{label:'TOTP app code', passwordless:false, phishResistant:false, note:'A possession factor, but typically paired WITH a password; phishable.'},
+  'password':{label:'Password', passwordless:false, phishResistant:false, note:'The thing passwordless aims to eliminate.'}
+};
+function classifyPasswordless(key){ return PASSWORDLESS_FACTORS[key]||null; }
+function isTruePasswordlessMFA(key){
+  const f=PASSWORDLESS_FACTORS[key]; return !!(f&&f.passwordless&&f.phishResistant);
+}
+
+/* ---- Entra app SSO setup (Module 09 strengthen) ----
+   Validate that an app SSO integration has the right pieces depending on protocol. */
+function validateEntraSso(app){
+  // app: {protocol:'saml'|'oidc', entityId, acsUrl, replyUrl, claimsMapped, certConfigured, userAssigned}
+  const checks=[];
+  const push=(l,ok,d)=>checks.push({label:l,ok,detail:d});
+  if(app.protocol==='saml'){
+    push('Identifier (Entity ID) set', !!app.entityId, app.entityId?'matches the SP':'missing \u2014 SP can\u2019t identify the assertion audience');
+    push('Reply URL (ACS) set', !!app.acsUrl, app.acsUrl?'assertion will POST here':'missing \u2014 nowhere to send the assertion');
+    push('SAML signing certificate configured', !!app.certConfigured, app.certConfigured?'Entra will sign assertions':'unsigned \u2014 SP will reject');
+    push('Attributes/claims mapped', !!app.claimsMapped, app.claimsMapped?'SP gets the claims it needs':'SP may error on missing claim');
+  } else {
+    push('Redirect URI (reply URL) set', !!app.replyUrl, app.replyUrl?'tokens return here':'missing \u2014 OIDC flow can\u2019t complete');
+    push('Scopes/claims configured', !!app.claimsMapped, app.claimsMapped?'ID token carries needed claims':'missing claims');
+    push('Client credentials configured', !!app.certConfigured, app.certConfigured?'client secret/cert present':'app can\u2019t authenticate to the token endpoint');
+  }
+  push('Users/groups assigned to the app', !!app.userAssigned, app.userAssigned?'assigned principals can SSO':'no one is assigned \u2014 access blocked');
+  const ok=checks.every(c=>c.ok);
+  return {ok, checks, verdict: ok?'SSO integration is complete \u2014 assigned users can single-sign-on.':'SSO integration incomplete \u2014 fix the flagged items.'};
+}
+
+/* ===== unit tests (node) ===== */
+if(typeof module!=='undefined'&&module.exports){
+  const A=(n,c)=>console.log((c?'\u2713':'\u2717 FAIL')+' '+n);
+  const pol={requireEnrolled:true,requireEncryption:true,requireOsMin:14,requireScreenLock:true};
+  A('mdm compliant passes', mdmComplianceCheck(pol,{enrolled:true,encryption:true,osVersion:15,screenLock:true}).compliant);
+  A('mdm unenrolled blocked', !mdmComplianceCheck(pol,{enrolled:false,encryption:true,osVersion:15,screenLock:true}).compliant);
+  A('mdm old os blocked', !mdmComplianceCheck(pol,{enrolled:true,encryption:true,osVersion:12,screenLock:true}).compliant);
+  A('mac filevault is encryption', /encryption/i.test(macControlFor('filevault').role));
+  A('mac platformsso ties to idp', /idp|okta|entra/i.test(macControlFor('platformsso').role));
+  A('passkey is true passwordless mfa', isTruePasswordlessMFA('passkey_fido2'));
+  A('fastpass true passwordless', isTruePasswordlessMFA('okta_fastpass'));
+  A('magic link NOT phishing-resistant', !isTruePasswordlessMFA('magic_link'));
+  A('password not passwordless', !classifyPasswordless('password').passwordless);
+  A('sms not true passwordless', !isTruePasswordlessMFA('sms_otp'));
+  const saml={protocol:'saml',entityId:'sp',acsUrl:'https://acs',certConfigured:true,claimsMapped:true,userAssigned:true};
+  A('entra saml complete', validateEntraSso(saml).ok);
+  A('entra saml no cert fails', !validateEntraSso({...saml,certConfigured:false}).ok);
+  A('entra saml unassigned fails', !validateEntraSso({...saml,userAssigned:false}).ok);
+  const oidc={protocol:'oidc',replyUrl:'https://cb',claimsMapped:true,certConfigured:true,userAssigned:true};
+  A('entra oidc complete', validateEntraSso(oidc).ok);
+  A('entra oidc no redirect fails', !validateEntraSso({...oidc,replyUrl:''}).ok);
+  console.log('engines6 tests done');
 }
 /* =====================================================================
    CURRICULUM — Track 1: Foundations of Identity & Access
@@ -3425,6 +3569,56 @@ change dept → dynamic groups recompute → access follows automatically.</div>
       {q:'A guest inactive for 140 days with a sponsor should typically be:',
        o:['Kept indefinitely','Removed — long inactivity outweighs an unused sponsorship','Promoted to admin','Ignored'],a:1,
        e:'Sustained inactivity is a strong removal signal even with a sponsor; the access clearly isn\u2019t being used.'}
+    ]},
+  { id:'09.5', num:'09.5', title:'Entra ID as the SSO identity provider', minutes:10,
+    dek:'You\u2019ve used Entra for Conditional Access and PIM. Now use it as the SSO IdP itself, onboarding SaaS apps the way an Azure-shop engineer does.',
+    concept:`<p>Earlier Module 09 lessons treated Entra as the policy and governance layer. But Entra is also a full <b>SSO identity provider</b> \u2014 the Microsoft equivalent of Okta\u2019s app-integration role from Module 05. In Azure-centric shops, onboarding apps to Entra for single sign-on is core daily work.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Enterprise applications (Entra SSO)</div>In Entra, each SaaS app you connect for SSO is an <b>enterprise application</b>. The <b>gallery</b> has thousands of pre-integrated apps (templated config); non-gallery apps are added manually. For each, you configure SSO using the same protocols you already know: <b>SAML 2.0</b> or <b>OIDC/OAuth</b>.</div>
+    <h3>Setting up SAML SSO (the common case)</h3>
+    <p>For a SAML app, Entra is the IdP and the app is the SP. The pieces mirror the assertion anatomy from Module 02.5:</p>
+    <ul>
+      <li><b>Identifier (Entity ID)</b> \u2014 uniquely names the app (the assertion\u2019s audience).</li>
+      <li><b>Reply URL (ACS)</b> \u2014 where Entra POSTs the SAML assertion.</li>
+      <li><b>SAML signing certificate</b> \u2014 Entra signs assertions with it; the app trusts it.</li>
+      <li><b>Attributes &amp; claims</b> \u2014 what Entra sends about the user (email, name, groups) \u2014 the app errors if a needed claim is missing.</li>
+      <li><b>User/group assignment</b> \u2014 who is allowed to SSO; unassigned users are blocked.</li>
+    </ul>
+    <h3>OIDC apps, and why assignment matters</h3>
+    <p>For modern apps you use <b>OIDC/OAuth</b> instead: register the app, set its <b>redirect URI</b>, configure <b>scopes/claims</b> and a <b>client secret/certificate</b>. Either way, <b>user/group assignment</b> is the access gate \u2014 connecting an app isn\u2019t enough; principals must be assigned (ideally via groups, the RBAC pattern from Module 03). And every SSO sign-in still flows through Conditional Access (09.1), so device and MFA policy apply.</p>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>The "works for me, not for them" trap:</b> the most common Entra SSO support ticket is a user who can\u2019t access an app because they (or their group) <b>aren\u2019t assigned</b> to the enterprise application \u2014 even though SSO is configured perfectly. Assignment is a separate step from configuration. Check assignment first when one user fails but the integration otherwise works.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the JD:</b> "configuring SAML 2.0 SSO integrations for onboarding new SaaS applications" appears on both Okta and Entra job descriptions. You now have both sides: Okta app integration (Module 05) and Entra enterprise-app SSO here. The concepts are the same (SAML/OIDC, claims, assignment); the consoles differ. The lab has you complete an Entra SSO onboarding end to end.</div></div>`,
+    example:`<p>Onboarding a SaaS app to Entra for SAML SSO, field by field \u2014 the Azure mirror of the Okta integration you already did.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 SAML SSO onboarding in Entra</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#0078d4"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">entra \u00b7 enterprise app SSO</div><div class="chip">SAML</div></div>
+    <div class="console-body"><div class="mono-out">app: "Northwind Travel" (SaaS)   Entra = IdP, app = SP
+
+Identifier (Entity ID) ... sp:northwind-travel        <span style="color:#34d399">\u2713</span>
+Reply URL (ACS) .......... https://travel/saml/acs    <span style="color:#34d399">\u2713</span>
+Signing certificate ...... configured (Entra signs)   <span style="color:#34d399">\u2713</span>
+Attributes/claims ........ email, name, groups mapped  <span style="color:#34d399">\u2713</span>
+Users/groups assigned .... "Travel-Users" group        <span style="color:#34d399">\u2713</span>
+
+\u2192 assigned users click the tile \u2192 Entra issues a signed assertion
+  \u2192 (Conditional Access still applies) \u2192 app establishes the session</div></div></div>
+    <p>Five pieces \u2014 identifier, ACS, cert, claims, assignment \u2014 and SSO works for assigned users, with CA still enforced. In the lab you\u2019ll configure each piece to complete the integration.</p></div>`,
+    lab:{ kind:'entrasso', id:'09.5', appName:'Northwind Travel', appKey:'northwind-travel',
+      title:'Onboard a SaaS app for SSO',
+      objective:'Configure SAML SSO for a new enterprise application in Entra: set the Identifier and Reply URL, configure the signing certificate, map the claims, and assign users. Save and test until SSO works.',
+      intro:'',
+      start:{ protocol:'saml', entityId:'', acsUrl:'', certConfigured:false, claimsMapped:false, userAssigned:false }},
+    quiz:[
+      {q:'In Entra, a SaaS app connected for SSO is called:',
+       o:['A conditional policy','An enterprise application','A managed device','A refresh token'],a:1,
+       e:'Enterprise applications represent connected apps; the gallery offers thousands of pre-integrated templates.'},
+      {q:'For a SAML SSO app in Entra, the Reply URL (ACS) is:',
+       o:['The app\u2019s logo','Where Entra POSTs the signed SAML assertion','The user\u2019s password','The MFA method'],a:1,
+       e:'The ACS/Reply URL is the SP endpoint that receives the assertion \u2014 the same ACS concept from Module 02.'},
+      {q:'A user can\u2019t open an app although SSO is configured correctly. Check first:',
+       o:['Their monitor','Whether the user/group is ASSIGNED to the enterprise application','The weather','Their password length'],a:1,
+       e:'Assignment is a separate gate from configuration; unassigned users are blocked even with perfect SSO setup.'},
+      {q:'SSO sign-ins through Entra enterprise apps are:',
+       o:['Exempt from policy','Still subject to Conditional Access (device, MFA, risk)','Always blocked','Password-only'],a:1,
+       e:'CA applies to SSO sign-ins, so device-compliance, MFA, and risk policies still govern access to the app.'}
     ]}
   ]},
 /* ===================== MODULE 10 — HR-Driven Provisioning (HRIS to IdP to AD) ===================== */
@@ -4462,6 +4656,379 @@ friction scales with risk \u2014 invisible at Tier 1, firm at Tier 3</div></div>
        o:['SMS + any device','Phishing-resistant MFA + a compliant device + step-up at the sensitive action','Password only','A longer username'],a:1,
        e:'Privileged access warrants phishing-resistant factors on a healthy, managed device, with step-up re-auth at the point of high-risk action.'}
     ]}
+  ]},
+/* ===================== MODULE 15 — Devices, MDM & Endpoint Trust ===================== */
+/* ===================== MODULE 15 — Devices, MDM & Endpoint Trust ===================== */
+{ id:'M15', num:'15', title:'Devices, MDM &amp; Endpoint Trust', sub:'4 lessons \u00b7 Intune \u00b7 Jamf \u00b7 macOS \u00b7 compliance',
+  blurb:'Identity verifies the person; the device half of Zero Trust verifies the machine. How MDM (Intune, Jamf) manages endpoints, how macOS access controls actually work, and how device compliance becomes a gate on access across Windows, Mac, and mobile.',
+  lessons:[
+  /* ---------------- 15.1 ---------------- */
+  { id:'15.1', num:'15.1', title:'MDM fundamentals: Intune & Jamf', minutes:10,
+    dek:'The management layer underneath device-based access. What an MDM is, what it enforces, and how Intune and Jamf split the world.',
+    concept:`<p>Module 13 introduced Okta Device Assurance, which <i>reads</i> a device\u2019s posture. This module goes underneath that: the <b>MDM</b> is what actually <i>manages and enforces</i> the posture in the first place. You can\u2019t gate access on device health without something maintaining that health.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">MDM (Mobile Device Management)</div>A platform that <b>enrolls</b> devices, pushes <b>configuration</b> (settings, restrictions, certificates, Wi-Fi/VPN profiles), enforces <b>security policy</b> (encryption, passcode, OS version), and reports each device\u2019s <b>compliance</b> state. Despite the name, modern MDM (often called UEM \u2014 Unified Endpoint Management) covers laptops and desktops too, not just phones.</div>
+    <h3>The two MDMs you\u2019ll meet most</h3>
+    <ul>
+      <li><b>Microsoft Intune</b> \u2014 the MDM in the Microsoft/Entra ecosystem. Manages Windows, iOS/iPadOS, Android, and macOS; its <b>compliance state flows into Entra Conditional Access</b> as a signal (the device-based CA you\u2019ll build in 15.3).</li>
+      <li><b>Jamf</b> \u2014 the dominant <b>Apple-specialist</b> MDM (Jamf Pro). Deep macOS and iOS management, used heavily where Macs are first-class. Integrates with Okta and Entra so Apple-device compliance becomes an access signal too.</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Enrollment &amp; compliance</div><b>Enrollment</b> is how a device comes under management (user-initiated, or automated via Apple Business Manager / Windows Autopilot for zero-touch). <b>Compliance</b> is the ongoing verdict: does this enrolled device currently meet policy (encrypted, locked, patched)? Only the combination \u2014 enrolled <i>and</i> compliant \u2014 should earn access to corporate resources.</div>
+    <h3>Why IAM cares about the MDM</h3>
+    <p>The MDM is what makes "require a healthy device" enforceable rather than aspirational. Without it, "device compliance" is a guess. With it, the IdP/CA can trust a real, continuously-evaluated signal. This is why device management and identity have converged: the MDM supplies the posture, identity consumes it at the access decision.</p>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the field:</b> the common enterprise split is <b>Intune for Windows + mobile, Jamf for Mac</b>, both feeding compliance into the same identity layer (Entra and/or Okta). Knowing that division \u2014 and that MDM compliance is the <i>source</i> of the device signal your CA/Device Assurance policies rely on \u2014 is exactly the endpoint-and-identity fluency these roles want.</div></div>`,
+    example:`<p>One unmanaged laptop, brought under management and into compliance, then granted access. Watch the MDM produce the signal identity needs.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 enroll \u2192 comply \u2192 access</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#0078d4"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">mdm \u00b7 device onboarding</div><div class="chip">UEM</div></div>
+    <div class="console-body"><div class="mono-out">new laptop, never managed
+  \u2192 <span style="color:#22d3ee">enroll</span> in MDM (Intune / Jamf)        device now known &amp; managed
+  \u2192 MDM pushes config: <span style="color:#22d3ee">encryption on, passcode, OS baseline</span>
+  \u2192 MDM evaluates compliance ............ <span style="color:#34d399">COMPLIANT</span>
+  \u2192 compliance state flows to the IdP / Conditional Access
+  \u2192 user signs in from this device ....... <span style="color:#34d399">access granted</span>
+
+an UNENROLLED device never produces a compliant signal \u2192 access blocked</div></div></div>
+    <p>Enroll, configure, evaluate, signal, grant. The MDM is the engine in steps 1\u20133; identity consumes the result in steps 4\u20135. In the lab you\u2019ll act as the compliance engine and predict each device\u2019s verdict.</p></div>`,
+    lab:{ kind:'mdmgate', id:'15.1', mdm:'Intune / Jamf',
+      title:'Run the compliance gate',
+      objective:'An MDM compliance policy requires enrolled, encrypted devices on a current OS with a screen lock. For each device, predict <b>compliant</b> (access allowed) or <b>non-compliant</b> (blocked). All correct to pass.',
+      intro:'',
+      policy:{ requireEnrolled:true, requireEncryption:true, requireOsMin:14, requireScreenLock:true },
+      devices:[
+        {name:'Corp MacBook (Jamf)', platform:'macOS', enrolled:true, encryption:true, osVersion:15, screenLock:true},
+        {name:'Personal laptop (BYOD)', platform:'Windows', enrolled:false, encryption:true, osVersion:15, screenLock:true},
+        {name:'Old Surface, OS 12', platform:'Windows', enrolled:true, encryption:true, osVersion:12, screenLock:true},
+        {name:'Unencrypted loaner', platform:'Windows', enrolled:true, encryption:false, osVersion:15, screenLock:true},
+        {name:'Managed iPhone (Intune)', platform:'iOS', enrolled:true, encryption:true, osVersion:17, screenLock:true}
+      ]},
+    quiz:[
+      {q:'An MDM\u2019s core job is to:',
+       o:['Replace the firewall','Enroll devices, push configuration, enforce security policy, and report compliance','Store passwords','Run SSO'],a:1,
+       e:'MDM/UEM manages endpoints and produces the compliance signal that identity then consumes at the access decision.'},
+      {q:'In a typical enterprise split, which MDM manages the Macs?',
+       o:['Intune only','Jamf (the Apple specialist), with Intune often handling Windows + mobile','Neither','Okta'],a:1,
+       e:'Jamf is the Apple-focused MDM; many shops run Jamf for Mac and Intune for Windows/mobile, both feeding identity.'},
+      {q:'Why does the MDM matter to identity/Conditional Access?',
+       o:['It picks passwords','It produces the real, continuously-evaluated device-compliance signal CA relies on','It hosts the website','It blocks email'],a:1,
+       e:'Without an MDM, "require a healthy device" is unenforceable; the MDM supplies the trustworthy posture signal.'},
+      {q:'A device that is enrolled but currently unencrypted should be:',
+       o:['Allowed \u2014 it\u2019s enrolled','Marked non-compliant and blocked until remediated','Made an admin','Ignored'],a:1,
+       e:'Enrollment isn\u2019t enough; the device must also meet policy (e.g. encryption) to be compliant and earn access.'}
+    ]},
+  /* ---------------- 15.2 ---------------- */
+  { id:'15.2', num:'15.2', title:'macOS access controls', minutes:10,
+    dek:'The Mac security stack most IAM training ignores. FileVault, Gatekeeper, TCC, Platform SSO, and how MDM enforces them.',
+    concept:`<p>Plenty of IAM material is implicitly Windows-centric, but enterprises run a lot of Macs \u2014 and the macOS security model has its own named controls. Knowing them (and that MDM is how you enforce them) is a real differentiator.</p>
+    <div class="keyterm"><div class="kt-label">The macOS controls to know</div><div class="kt-term">FileVault \u00b7 Gatekeeper \u00b7 XProtect \u00b7 TCC</div><b>FileVault</b> \u2014 full-disk encryption (the Mac equivalent of BitLocker); MDM enforces it and escrows the recovery key. <b>Gatekeeper</b> \u2014 blocks unsigned/untrusted apps from launching. <b>XProtect</b> \u2014 Apple\u2019s built-in malware signature scanning. <b>TCC (Transparency, Consent &amp; Control)</b> \u2014 governs which apps can reach the camera, mic, and files; managed at scale via MDM privacy profiles.</div>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Platform SSO (macOS)</div>A modern capability that ties the <b>macOS login itself</b> to your cloud IdP (Okta or Entra) \u2014 so the password the user types to unlock the Mac is their cloud identity, and sign-in can use phishing-resistant keys. It collapses the old gap between "local Mac account" and "cloud identity" into one, enforced through the MDM.</div>
+    <h3>The pattern: MDM is the enforcement arm</h3>
+    <p>Notice the through-line: every one of these controls is <b>configured and enforced via the MDM</b> (Jamf or Intune) using configuration profiles. FileVault on, Gatekeeper locked down, TCC privacy pre-approved for managed apps, Platform SSO wired to the IdP. The MDM turns "the Mac should be secure" into specific, pushed, verifiable settings \u2014 which then feed the compliance signal from 15.1.</p>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>For the role:</b> being able to say "on macOS we enforce FileVault and Gatekeeper via Jamf config profiles, manage privacy with TCC, and tie login to Entra with Platform SSO" signals you can secure the half of the fleet many identity people hand-wave. It pairs directly with the Jamf/MDM line in modern JDs.</div></div>`,
+    example:`<p>A managed Mac, control by control, each enforced through the MDM \u2014 the Apple counterpart to a hardened Windows endpoint.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 a hardened, managed Mac</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#a2aaad"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">macOS \u00b7 enforced via Jamf</div><div class="chip">APPLE</div></div>
+    <div class="console-body"><div class="mono-out">control        what it does                        enforced by
+<span style="color:#22d3ee">FileVault</span>      full-disk encryption + key escrow   MDM config profile
+<span style="color:#22d3ee">Gatekeeper</span>     blocks unsigned/untrusted apps      MDM policy
+<span style="color:#22d3ee">XProtect</span>       built-in malware scanning           on by default
+<span style="color:#22d3ee">TCC</span>            camera/mic/files consent control    MDM privacy (PPPC) profile
+<span style="color:#22d3ee">Platform SSO</span>   Mac login = cloud identity (IdP)    MDM + IdP config
+
+result: a Mac that\u2019s encrypted, app-controlled, privacy-governed, and
+        signed in with the corporate identity \u2014 all centrally managed</div></div></div>
+    <p>Five controls, one enforcement arm (the MDM), and the result is a Mac that can produce a trustworthy compliance signal. In the lab you\u2019ll match each security need to the right macOS control.</p></div>`,
+    lab:{ kind:'maccontrols', id:'15.2',
+      title:'Map the macOS controls',
+      objective:'Match each macOS security need to the control that provides it: <b>FileVault</b> (encryption), <b>Gatekeeper</b> (app control), <b>TCC</b> (privacy), <b>Platform SSO</b> (login = identity), or the <b>MDM config profile</b> (enforcement). All correct to pass.',
+      prompt:'Match each macOS security need to the control that provides it.',
+      controlKeys:['filevault','gatekeeper','tcc','platformsso','mdmprofile'],
+      tasks:[
+        {task:'Encrypt the disk so data is protected if the Mac is lost, with the recovery key escrowed centrally.', control:'filevault'},
+        {task:'Prevent unsigned or untrusted applications from launching.', control:'gatekeeper'},
+        {task:'Control which apps may access the camera, microphone, and files.', control:'tcc'},
+        {task:'Tie the macOS login to the cloud IdP so the Mac password is the corporate identity.', control:'platformsso'},
+        {task:'Push all of these settings and restrictions to the Mac from Jamf/Intune.', control:'mdmprofile'}
+      ],
+      debrief:''},
+    quiz:[
+      {q:'FileVault on macOS is the equivalent of:',
+       o:['A firewall','BitLocker \u2014 full-disk encryption','An antivirus','A password manager'],a:1,
+       e:'FileVault provides full-disk encryption; MDM enforces it and escrows the recovery key.'},
+      {q:'TCC (Transparency, Consent & Control) governs:',
+       o:['Disk encryption','App access to camera, mic, and files (privacy)','SSO tokens','OS updates'],a:1,
+       e:'TCC controls app privacy permissions, manageable at scale via MDM privacy (PPPC) profiles.'},
+      {q:'Platform SSO on macOS does what?',
+       o:['Encrypts the disk','Ties the Mac login to the cloud IdP so the login password is the corporate identity','Blocks apps','Scans for malware'],a:1,
+       e:'Platform SSO links macOS sign-in to Okta/Entra, collapsing local vs. cloud identity and enabling phishing-resistant login.'},
+      {q:'How are these macOS controls enforced across a fleet?',
+       o:['Manually on each Mac','Via MDM (Jamf/Intune) configuration profiles','They can\u2019t be','Through email'],a:1,
+       e:'The MDM is the enforcement arm \u2014 it pushes config profiles that set FileVault, Gatekeeper, TCC, and Platform SSO centrally.'}
+    ]},
+  /* ---------------- 15.3 ---------------- */
+  { id:'15.3', num:'15.3', title:'Entra device-based Conditional Access', minutes:10,
+    dek:'Wire Intune compliance into Entra so only healthy, managed devices reach corporate apps, including mobile.',
+    concept:`<p>Module 09 covered Entra Conditional Access on signals like risk and MFA. Here\u2019s the device dimension: CA can require a device to be <b>compliant</b> (per Intune) or <b>Entra hybrid-joined</b> before granting access \u2014 the Microsoft counterpart to Okta Device Assurance, and the place mobile device control lives.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Device-based Conditional Access</div>A CA policy grant control that requires the signing-in device to be <b>marked compliant</b> by Intune (or <b>hybrid Entra joined</b>). The device\u2019s compliance state \u2014 produced by the MDM in 15.1 \u2014 becomes a hard requirement: non-compliant or unmanaged devices are blocked or limited, even for a valid, MFA\u2019d user.</div>
+    <h3>How the signal flows (mobile included)</h3>
+    <ul>
+      <li>Intune enrolls the device (laptop or phone) and continuously evaluates <b>compliance</b>.</li>
+      <li>The device registers with <b>Entra</b>, which now knows its compliance state.</li>
+      <li>A CA policy says, e.g., "to reach Exchange/SharePoint, <b>require a compliant device</b>."</li>
+      <li>At sign-in, Entra checks the device state and <b>allows, limits, or blocks</b> accordingly.</li>
+    </ul>
+    <p>For <b>mobile</b> specifically, this is how you enforce that corporate email and apps open only on a managed, compliant phone \u2014 and how you can require <b>app protection policies</b> (e.g. no copy-paste out of managed apps) as a condition. It\u2019s device control for the pocket, driven by the same compliance signal.</p>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>Compliant vs. just-enrolled:</b> requiring a device be <i>registered</i> isn\u2019t the same as requiring it be <i>compliant</i>. A registered-but-non-compliant phone (jailbroken, no passcode, outdated OS) should fail a "require compliant device" policy. The strength of device-based CA is that it keys on the live compliance verdict, not mere enrollment.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>From the bio/JD:</b> "implemented Conditional Access\u2026 to support Zero Trust" plus mobile/device control maps exactly here \u2014 Intune compliance feeding Entra CA, including app protection for mobile. It\u2019s the Microsoft mirror of the Okta Device Assurance you already practiced.</div></div>`,
+    example:`<p>One Entra CA policy \u2014 "require a compliant device" \u2014 against a mixed fleet including phones. Compliance, not identity, decides.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 device-based CA in action</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#0078d4"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">entra CA \u00b7 require compliant device</div><div class="chip">ENTRA</div></div>
+    <div class="console-body"><div class="mono-out">target: Exchange Online + SharePoint   grant: require compliant device
+
+corp laptop  Intune-compliant ................. <span style="color:#34d399">ALLOW</span>
+managed phone Intune-compliant + app protection . <span style="color:#34d399">ALLOW</span>
+personal phone not enrolled ................... <span style="color:#f87171">BLOCK</span>
+old phone    enrolled but non-compliant (no PIN) <span style="color:#f87171">BLOCK</span>
+
+same user everywhere \u2014 only compliant, managed devices reach the data</div></div></div>
+    <p>Identity passes each time; the device\u2019s Intune compliance state is the deciding factor, phones included. In the lab you\u2019ll predict the compliance verdict that drives these allow/block outcomes.</p></div>`,
+    lab:{ kind:'mdmgate', id:'15.3', mdm:'Intune \u2192 Entra CA',
+      title:'Gate mobile + laptop access',
+      objective:'Entra CA requires a compliant, Intune-managed device (enrolled, encrypted, current OS, passcode/lock) to reach corporate apps. Predict compliant vs. non-compliant for each, including phones. All correct to pass.',
+      intro:'',
+      policy:{ requireEnrolled:true, requireEncryption:true, requireOsMin:16, requireScreenLock:true },
+      devices:[
+        {name:'Corp laptop (Intune)', platform:'Windows', enrolled:true, encryption:true, osVersion:18, screenLock:true},
+        {name:'Managed iPhone (Intune)', platform:'iOS', enrolled:true, encryption:true, osVersion:17, screenLock:true},
+        {name:'Personal Android (unenrolled)', platform:'Android', enrolled:false, encryption:true, osVersion:14, screenLock:true},
+        {name:'Old work phone, no passcode', platform:'iOS', enrolled:true, encryption:true, osVersion:17, screenLock:false},
+        {name:'Outdated tablet, OS 14', platform:'iOS', enrolled:true, encryption:true, osVersion:14, screenLock:true}
+      ]},
+    quiz:[
+      {q:'Device-based Conditional Access in Entra requires the device to be:',
+       o:['A certain color','Marked compliant by Intune (or hybrid Entra joined)','On Wi-Fi','Brand new'],a:1,
+       e:'CA can require Intune compliance/hybrid join as a grant control, consuming the MDM compliance signal.'},
+      {q:'For mobile, device-based CA lets you enforce that:',
+       o:['Phones can\u2019t be used','Corporate apps/email open only on a managed, compliant phone (and can require app protection)','SMS is the only MFA','Phones get admin rights'],a:1,
+       e:'It gates mobile access on compliance and can layer app protection policies \u2014 device control for phones.'},
+      {q:'A phone that is enrolled but has no passcode and an outdated OS should be:',
+       o:['Allowed \u2014 it\u2019s enrolled','Blocked \u2014 enrolled \u2260 compliant; it fails the policy','Made compliant automatically','Ignored'],a:1,
+       e:'Device-based CA keys on the live compliance verdict, not mere enrollment; a non-compliant device is blocked.'},
+      {q:'This Entra capability is the Microsoft mirror of which Okta feature?',
+       o:['Universal Directory','Device Assurance','Workflows','PIM'],a:1,
+       e:'Entra device-based CA parallels Okta Device Assurance \u2014 both gate access on device posture/compliance.'}
+    ]},
+  /* ---------------- 15.4 ---------------- */
+  { id:'15.4', num:'15.4', title:'Designing endpoint trust', minutes:9,
+    dek:'Bring it together: a coherent device-trust strategy across Windows, Mac, and mobile that gates access without grinding work to a halt.',
+    concept:`<p>You now have the pieces: MDM (Intune/Jamf), macOS controls, and device-based CA/Device Assurance. The engineering skill is composing them into one <b>endpoint-trust strategy</b> that\u2019s consistent across platforms and proportional to risk.</p>
+    <div class="keyterm"><div class="kt-label">The design principle</div><div class="kt-term">Managed + compliant earns access; risk sets the bar</div>Corporate resources require a <b>managed, compliant</b> device. The <i>height</i> of the bar scales with sensitivity: routine apps may accept any compliant device; crown-jewel systems may also require a corporate-owned, supervised device plus phishing-resistant auth. One model, dialed per resource.</p></div>
+    <h3>The decisions that define the strategy</h3>
+    <ul>
+      <li><b>Ownership model</b> \u2014 corporate-owned (fully managed) vs. <b>BYOD</b> (often app-level management / app protection rather than full device control, to respect personal privacy).</li>
+      <li><b>Platform parity</b> \u2014 enforce equivalent posture on Windows (Intune/BitLocker), Mac (Jamf/FileVault), and mobile (Intune/app protection), so there\u2019s no weak platform.</li>
+      <li><b>Compliance bar</b> \u2014 what "compliant" means: encryption, OS baseline, lock, not jailbroken/rooted.</li>
+      <li><b>Access tiering</b> \u2014 low-risk apps: any compliant device; high-risk: corporate-owned + phishing-resistant auth + step-up.</li>
+    </ul>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>BYOD privacy is a real constraint:</b> employees resist (rightly) full corporate control of personal phones. The mature pattern is <b>app protection / managed-app</b> policies on BYOD \u2014 protecting corporate data inside managed apps without the company wiping or surveilling the whole personal device. Forcing full MDM on personal devices drives shadow IT; respecting the line keeps people compliant.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>The whole module, in one sentence to an interviewer:</b> "We require managed, compliant devices for corporate access \u2014 Intune for Windows and mobile, Jamf for Mac \u2014 with FileVault/BitLocker and OS baselines enforced, device-based Conditional Access gating the sensitive apps, and app-protection policies for BYOD so we cover personal phones without overreaching." That\u2019s endpoint trust, designed.</div></div>`,
+    example:`<p>One company, three tiers of resources, matched device-trust requirements across every platform. The endpoint-trust design conversation in practice.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 tiered endpoint trust</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">endpoint-trust \u00b7 by resource tier</div></div>
+    <div class="console-body"><div class="mono-out"><span style="color:#34d399">TIER 1 \u2014 low risk</span>  (wiki, time-off)
+  any Intune/Jamf-compliant device (incl. BYOD w/ app protection)
+
+<span style="color:#fbbf24">TIER 2 \u2014 business apps</span>  (CRM, email, SharePoint)
+  managed + compliant device (encrypted, OS baseline, lock) via device-based CA
+
+<span style="color:#f87171">TIER 3 \u2014 crown jewels</span>  (admin consoles, financial systems)
+  corporate-owned + supervised device + phishing-resistant auth + step-up
+
+platform parity throughout: Windows (Intune/BitLocker) \u00b7 Mac (Jamf/FileVault)
+                            \u00b7 mobile (Intune/app protection)</div></div></div>
+    <p>One coherent model, scaled by sensitivity, with no weak platform and BYOD handled respectfully. In the lab you\u2019ll make the calls that define a sound endpoint-trust strategy.</p></div>`,
+    lab:{ kind:'capstone', id:'15.4',
+      title:'Design the endpoint-trust strategy',
+      scenario:'You\u2019re setting device-trust policy across Windows, Mac, and mobile. Select every decision that reflects sound, proportional design. A weak or absolutist choice fails the review.',
+      options:[
+        {t:'Require a managed, compliant device (encrypted, OS baseline, screen lock) for corporate-app access.', good:true},
+        {t:'Enforce platform parity: Intune/BitLocker on Windows, Jamf/FileVault on Mac, app protection on mobile.', good:true},
+        {t:'Use device-based Conditional Access to gate sensitive apps on Intune compliance.', good:true},
+        {t:'Force full MDM control onto every employee\u2019s personal phone, including personal data.', good:false},
+        {t:'Use app-protection / managed-app policies for BYOD to protect corporate data without overreaching.', good:true},
+        {t:'Leave Macs unmanaged because "Macs don\u2019t get viruses."', good:false},
+        {t:'Scale the device bar with risk: any compliant device for low-risk, corporate-owned + phishing-resistant for crown jewels.', good:true},
+        {t:'Require devices be compliant, not merely enrolled, before granting access.', good:true}
+      ]},
+    quiz:[
+      {q:'A sound endpoint-trust baseline for corporate access is:',
+       o:['Any device, no checks','A managed, compliant device (encrypted, OS baseline, lock)','Only brand-new devices','Devices on Wi-Fi only'],a:1,
+       e:'Require managed + compliant devices; scale additional requirements with the sensitivity of the resource.'},
+      {q:'The right way to handle BYOD personal phones is usually:',
+       o:['Full device MDM and remote wipe of everything','App-protection / managed-app policies that protect corporate data without controlling personal data','Ban all personal phones','Ignore them'],a:1,
+       e:'App-level management protects corporate data while respecting personal privacy \u2014 forcing full MDM drives shadow IT.'},
+      {q:'"Platform parity" in endpoint trust means:',
+       o:['Everyone uses the same laptop','Enforcing equivalent posture on Windows, Mac, and mobile so no platform is the weak link','Only supporting one OS','Buying matching colors'],a:1,
+       e:'Equivalent controls across platforms (BitLocker/FileVault, OS baselines, compliance) prevent an unmanaged platform from being the gap.'},
+      {q:'Scaling the device bar to risk means:',
+       o:['Same rules for everything','Low-risk apps accept any compliant device; crown jewels also require corporate-owned + phishing-resistant auth','No rules at all','Blocking everyone'],a:1,
+       e:'Proportional design: more sensitive resources demand stronger device and authentication requirements.'}
+    ]}
+  ]},
+/* ===================== MODULE 16 — Passwordless & Modern Tokens ===================== */
+{ id:'M16', num:'16', title:'Passwordless &amp; Modern Tokens', sub:'3 lessons \u00b7 passkeys \u00b7 FastPass \u00b7 strategy',
+  blurb:'The industry is moving past the password. What "passwordless" actually means, which methods are truly passwordless AND phishing-resistant (and which only look it), the tokens behind them, and how to roll passwordless out without locking anyone out.',
+  lessons:[
+  /* ---------------- 16.1 ---------------- */
+  { id:'16.1', num:'16.1', title:'What passwordless really means', minutes:10,
+    dek:'Passkeys, FastPass, Windows Hello, and the imposters. The line between true passwordless and "no password but still phishable."',
+    concept:`<p>"Passwordless" is everywhere in vendor marketing, but it\u2019s often misused. The goal isn\u2019t just <i>hiding</i> the password \u2014 it\u2019s eliminating the shared secret entirely, ideally with a credential that <b>can\u2019t be phished</b>. Module 13 introduced phishing-resistant factors; this lesson makes passwordless precise.</p>
+    <div class="keyterm"><div class="kt-label">Core term</div><div class="kt-term">Passwordless authentication</div>Authenticating with <b>no password anywhere in the flow</b> \u2014 typically using <b>public-key cryptography</b>: the user holds a private key (on a device or security key) and proves possession by signing a challenge. There\u2019s no shared secret to steal, reuse, or phish.</div>
+    <h3>The truly passwordless &amp; phishing-resistant set</h3>
+    <ul>
+      <li><b>FIDO2 / WebAuthn passkeys</b> \u2014 public-key credentials bound to the site\u2019s origin. A fake page can\u2019t use them. The gold standard, on security keys or as platform/synced passkeys (Face ID / Touch ID / Windows Hello).</li>
+      <li><b>Okta FastPass</b> \u2014 device-bound, origin-checked, no password; Okta\u2019s passwordless answer.</li>
+      <li><b>Windows Hello for Business</b> \u2014 TPM-bound biometric/PIN using asymmetric keys; the PIN unlocks the local key, it never travels.</li>
+    </ul>
+    <div class="keyterm"><div class="kt-label">The imposters</div><div class="kt-term">"No password" \u2260 phishing-resistant</div>Some methods drop the password but are still phishable. <b>Email magic links</b> are passwordless yet interceptable/relayable. <b>SMS or TOTP codes</b> are possession factors but typically pair <i>with</i> a password and are phishable. A method must be <b>both</b> passwordless and phishing-resistant to be in the strong tier \u2014 don\u2019t let "passwordless" alone fool you.</div>
+    <h3>Why the PIN/biometric isn\u2019t "a password"</h3>
+    <p>A common confusion: "Windows Hello uses a PIN \u2014 isn\u2019t that a password?" No. The PIN/biometric <b>unlocks a private key stored locally in the TPM</b>; it\u2019s never transmitted and is useless on another device. The thing sent to the server is a cryptographic signature, not a secret. That local-unlock-of-a-bound-key model is what makes it passwordless and phishing-resistant at once.</p>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>For interviews:</b> "Is that passwordless?" is a great filter question. The strong answer distinguishes <i>true</i> passwordless + phishing-resistant (passkeys, FastPass, Hello) from "no-password-but-phishable" (magic links) and from MFA-with-a-password (password + TOTP). Knowing the line \u2014 and <i>why</i> a local PIN isn\u2019t a transmitted secret \u2014 reads as real depth.</div></div>`,
+    example:`<p>Five "passwordless-ish" methods, sorted by the real test: no password AND can\u2019t be phished.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 true passwordless vs. imposters</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i></div><div class="title">passwordless \u00b7 the real test</div></div>
+    <div class="console-body"><div class="mono-out">method                  no password?   phishing-resistant?   verdict
+FIDO2 passkey               yes              yes          <span style="color:#34d399">TRUE passwordless</span>
+Okta FastPass               yes              yes          <span style="color:#34d399">TRUE passwordless</span>
+Windows Hello (PIN/bio)     yes              yes          <span style="color:#34d399">TRUE passwordless</span>
+email magic link            yes              <span style="color:#f87171">no</span>           <span style="color:#fbbf24">passwordless but phishable</span>
+password + TOTP             <span style="color:#f87171">no</span>               no           <span style="color:#fbbf24">MFA, not passwordless</span>
+
+the bar for the strong tier = BOTH columns "yes"</div></div></div>
+    <p>Only the top three clear both bars. Magic links drop the password but can be relayed; password+TOTP is solid MFA but still has a phishable secret. In the lab you\u2019ll sort a set of methods by this exact test.</p></div>`,
+    lab:{ kind:'passwordless', id:'16.1',
+      title:'Sort the passwordless methods',
+      objective:'For each method, decide: is it TRUE passwordless AND phishing-resistant, or not (still has a password, or is phishable)? All correct to pass.',
+      prompt:'For each method, decide: is it TRUE passwordless AND phishing-resistant, or not (still has a password, or is phishable)?',
+      factors:['passkey_fido2','okta_fastpass','windows_hello','magic_link','sms_otp','password'],
+      debrief:''},
+    quiz:[
+      {q:'True passwordless authentication eliminates:',
+       o:['The username','The shared secret \u2014 using public-key crypto with a private key the user holds','MFA','The network'],a:1,
+       e:'Passwordless replaces the shared secret with a private key + signed challenge \u2014 nothing phishable is transmitted.'},
+      {q:'An email magic link is:',
+       o:['True passwordless and phishing-resistant','Passwordless but still phishable/interceptable \u2014 not in the strong tier','The same as a passkey','A password'],a:1,
+       e:'Magic links drop the password but can be relayed or intercepted, so they aren\u2019t phishing-resistant.'},
+      {q:'Why isn\u2019t a Windows Hello PIN considered "a password"?',
+       o:['It\u2019s shorter','It unlocks a TPM-bound private key locally and is never transmitted; the server gets a signature','It is a password','It\u2019s encrypted email'],a:1,
+       e:'The PIN/biometric unlocks a local key that never leaves the device; only a cryptographic signature is sent.'},
+      {q:'To qualify for the strong tier, a method must be:',
+       o:['Just passwordless','Both passwordless AND phishing-resistant','Just phishing-resistant','Fast'],a:1,
+       e:'Passkeys, FastPass, and Windows Hello meet both bars; "no password but phishable" (magic links) does not.'}
+    ]},
+  /* ---------------- 16.2 ---------------- */
+  { id:'16.2', num:'16.2', title:'The tokens behind authentication', minutes:10,
+    dek:'Sessions, refresh tokens, and the cryptographic keys passwordless relies on. What\u2019s actually held after you authenticate.',
+    concept:`<p>Authentication produces <b>tokens</b> \u2014 and understanding them ties together SSO (Module 02), OAuth/OIDC, and passwordless. After you prove who you are, the system issues artifacts that represent that proven state so you don\u2019t re-authenticate constantly.</p>
+    <div class="keyterm"><div class="kt-label">The tokens to know</div><div class="kt-term">ID \u00b7 access \u00b7 refresh \u00b7 session</div><b>ID token</b> (OIDC) \u2014 proves <i>who</i> authenticated, for the app. <b>Access token</b> (OAuth) \u2014 grants scoped access to an API, short-lived. <b>Refresh token</b> \u2014 longer-lived; gets new access tokens without re-login. <b>Session token/cookie</b> \u2014 keeps you signed in to the IdP/app. Each has a different lifetime and purpose; conflating them causes real bugs.</div>
+    <h3>The keys behind passwordless</h3>
+    <p>Passwordless adds a cryptographic layer beneath these tokens. In FIDO2/passkeys, the <b>private key</b> never leaves the authenticator; the server stores only the matching <b>public key</b>. Authentication is the authenticator signing a server <b>challenge</b> with the private key, which the server verifies with the public key. No secret is shared or stored server-side \u2014 which is why a breach of the server can\u2019t leak a reusable credential.</p>
+    <div class="keyterm"><div class="kt-label">Core security idea</div><div class="kt-term">Token lifetime &amp; revocation</div>Short-lived access tokens limit the damage of a leaked token; refresh tokens are powerful and must be protected and <b>revocable</b> (revoking sessions/tokens is exactly what the leaver scripts in Module 12 did). Passwordless doesn\u2019t remove tokens \u2014 you still issue and manage them \u2014 it strengthens the <i>authentication</i> that mints them.</div>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>Token theft is the next frontier:</b> as phishing-resistant auth blocks credential theft, attackers pivot to stealing <i>tokens/session cookies</i> after authentication. Defenses \u2014 short lifetimes, token binding, revocation on risk, continuous evaluation \u2014 matter even in a passwordless world. Strong auth mints the token; protecting the token is a separate, ongoing job.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>The JD line "tokens" + "passwordless," connected:</b> you should be able to say what an ID vs. access vs. refresh token is, that passkeys use a private/public keypair with the private key never leaving the device, and that even with passwordless you still manage token lifetime and revocation. That spans OIDC, FIDO2, and session security in one coherent picture.</div></div>`,
+    example:`<p>What a single passwordless sign-in actually mints and holds \u2014 keys at the bottom, tokens on top.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 keys and tokens in one sign-in</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#34d399"></i><i style="background:#22d3ee"></i><i style="background:#fbbf24"></i></div><div class="title">passwordless sign-in \u00b7 what\u2019s issued</div></div>
+    <div class="console-body"><div class="mono-out"><span style="color:#34d399">AUTH (crypto layer)</span>
+  server sends challenge \u2192 authenticator signs with PRIVATE key (never leaves device)
+  server verifies with stored PUBLIC key \u2192 identity proven, no secret shared
+
+<span style="color:#22d3ee">TOKENS (issued after auth)</span>
+  ID token ........ who you are (for the app)        short-lived
+  access token .... scoped API access               short-lived
+  refresh token ... mint new access tokens           longer-lived, protect + revocable
+  session cookie .. keeps you signed in              policy-bound
+
+<span style="color:#fbbf24">ongoing</span>: short lifetimes + revocation defend against token theft</div></div></div>
+    <p>The keypair proves identity; the tokens carry the proven state to apps and APIs. Passwordless hardens the bottom layer and leaves the token-management discipline intact. The checkpoint locks in the token roles.</p></div>`,
+    lab:{ kind:'classify', id:'16.2', mode:'tokens',
+      title:'Sort the tokens',
+      objective:'Match each artifact to its role: <b>Proves Identity</b> (who authenticated), <b>Grants Access</b> (to APIs/resources), or <b>Maintains Session</b> (keeps you signed in / renews access).',
+      intro:'Tag each. All correct to pass.',
+      threeway:['Proves Identity','Grants Access','Maintains Session'],
+      items:[
+        {t:'OIDC ID token \u2014 tells the app who just authenticated.',layer:'Proves Identity'},
+        {t:'OAuth access token \u2014 scoped, short-lived permission to call an API.',layer:'Grants Access'},
+        {t:'Refresh token \u2014 obtains new access tokens without re-login.',layer:'Maintains Session'},
+        {t:'Session cookie \u2014 keeps the user signed in to the app/IdP.',layer:'Maintains Session'},
+        {t:'FIDO2 public key on the server \u2014 verifies the user\u2019s signed challenge.',layer:'Proves Identity'},
+        {t:'Bearer access token sent on each API request.',layer:'Grants Access'}
+      ]},
+    quiz:[
+      {q:'In OAuth/OIDC, the token that proves WHO authenticated (for the app) is the:',
+       o:['Access token','ID token','Refresh token','Session cookie'],a:1,
+       e:'The OIDC ID token carries identity claims about the authenticated user; the access token is for API authorization.'},
+      {q:'In FIDO2/passkeys, the private key:',
+       o:['Is stored on the server','Never leaves the user\u2019s authenticator; the server keeps only the public key','Is emailed to the user','Is the password'],a:1,
+       e:'Authentication is a signed challenge; the server verifies with the public key, so a server breach leaks no reusable secret.'},
+      {q:'Why keep access tokens short-lived?',
+       o:['To annoy users','To limit the damage if a token is stolen (and pair with refresh tokens + revocation)','To save disk','They can\u2019t be long'],a:1,
+       e:'Short lifetimes shrink the window a leaked token is useful; refresh tokens (protected, revocable) handle renewal.'},
+      {q:'Even with passwordless auth, a remaining threat is:',
+       o:['Nothing \u2014 it\u2019s perfect','Token/session-cookie theft after authentication \u2014 hence short lifetimes, binding, and revocation','Passwords','Usernames'],a:1,
+       e:'Strong auth blocks credential theft, so attackers target post-auth tokens; protecting and revoking tokens stays essential.'}
+    ]},
+  /* ---------------- 16.3 ---------------- */
+  { id:'16.3', num:'16.3', title:'Rolling out passwordless', minutes:9,
+    dek:'Strategy, not just technology: how to move an organization to passwordless without lockouts, and with a safe fallback.',
+    concept:`<p>Going passwordless is as much a <b>rollout</b> problem as a technical one. The failure mode isn\u2019t the crypto \u2014 it\u2019s locking people out, or leaving a phishable backdoor that defeats the point. A sound strategy sequences the change and plans for recovery.</p>
+    <div class="keyterm"><div class="kt-label">The rollout principles</div><div class="kt-term">Phase it, prove it, protect the fallback</div><b>Phase</b> by group (pilot \u2192 IT \u2192 broad), starting where devices support passkeys/Hello. <b>Prove</b> enrollment before enforcing \u2014 users register a passkey/FastPass <i>while</i> still able to use the old method. <b>Protect the fallback</b>: account-recovery and break-glass paths must be at least as strong, or attackers just target the weak recovery.</div>
+    <h3>The decisions that make or break it</h3>
+    <ul>
+      <li><b>Enroll before enforce</b> \u2014 never flip enforcement on before users have a working passwordless credential, or you mass-lockout.</li>
+      <li><b>Account recovery</b> \u2014 the new soft underbelly. If a lost-key recovery falls back to a phishable code or a help-desk reset, you\u2019ve reintroduced the risk. Recovery must be strong (e.g. a second registered passkey, verified in-person/ID-proofed).</li>
+      <li><b>Break-glass accounts</b> \u2014 keep a small number of tightly-controlled emergency admin accounts, monitored, so a passwordless misconfiguration can\u2019t lock out all admins.</li>
+      <li><b>Retire weak factors deliberately</b> \u2014 phase out SMS/password fallback once passwordless is proven, not before, and not never.</li>
+    </ul>
+    <div class="callout warn"><span class="ic">\u26a0\ufe0f</span><div><b>Recovery is where passwordless programs fail:</b> organizations deploy beautiful phishing-resistant sign-in, then leave an account-recovery flow that resets to a password or SMS code \u2014 and attackers simply target recovery. The strength of passwordless is capped by the strength of its weakest fallback. Design recovery first, not last.</div></div>
+    <div class="callout real"><span class="ic">\ud83d\udef0\ufe0f</span><div><b>The whole module, as advice you could give:</b> "Pilot passwordless on capable devices, make users enroll a passkey before enforcing, keep a couple of monitored break-glass admins, and \u2014 most important \u2014 make account recovery as phishing-resistant as the front door before retiring the old factors." That\u2019s a rollout that strengthens security instead of just moving the weak point.</div></div>`,
+    example:`<p>A passwordless rollout done right \u2014 sequenced, with the fallback secured before the old factors are retired.</p>
+    <div class="example-wrap"><div class="example-label">Worked example \u00b7 a safe passwordless rollout</div>
+    <div class="console"><div class="console-bar"><div class="dots"><i style="background:#34d399"></i><i style="background:#22d3ee"></i><i style="background:#fbbf24"></i></div><div class="title">passwordless \u00b7 rollout plan</div></div>
+    <div class="console-body"><div class="mono-out">1 PILOT     IT + volunteers on passkey-capable devices
+2 ENROLL    users register a passkey/FastPass while password still works
+3 RECOVERY  stand up STRONG recovery (2nd passkey, ID-proofed) + break-glass admins
+4 ENFORCE   require passwordless per group, only after enrollment is proven
+5 RETIRE    phase out SMS/password fallback once passwordless is solid
+
+<span style="color:#f87171">anti-pattern</span>: enforce before enroll (mass lockout), or keep a
+            phishable SMS recovery (attackers just target recovery)</div></div></div>
+    <p>Enroll before enforce, secure recovery before retiring fallbacks. That sequence is the difference between a passwordless program that raises security and one that creates outages or a new soft target. In the lab you\u2019ll choose the decisions that make the rollout sound.</p></div>`,
+    lab:{ kind:'capstone', id:'16.3',
+      title:'Plan the passwordless rollout',
+      scenario:'You\u2019re leading the move to passwordless. Select every decision that makes the rollout secure and smooth. A risky or backwards choice fails the review.',
+      options:[
+        {t:'Have users enroll a passkey/FastPass before enforcing passwordless, so no one is locked out.', good:true},
+        {t:'Pilot on passkey-capable devices first, then expand by group.', good:true},
+        {t:'Make account recovery as phishing-resistant as sign-in (e.g. a second registered passkey).', good:true},
+        {t:'Flip enforcement on for everyone overnight before anyone has enrolled.', good:false},
+        {t:'Keep a small number of monitored break-glass admin accounts.', good:true},
+        {t:'Leave SMS-code account recovery in place permanently "just in case."', good:false},
+        {t:'Retire weak fallback factors only after passwordless is proven for a group.', good:true},
+        {t:'Treat account recovery as the priority, not an afterthought.', good:true}
+      ]},
+    quiz:[
+      {q:'The cardinal rule of passwordless rollout is:',
+       o:['Enforce first, enroll later','Enroll users in a passwordless credential before enforcing it','Skip the pilot','Never retire passwords'],a:1,
+       e:'Enroll-before-enforce prevents mass lockouts; users need a working passwordless credential before the old one is required away.'},
+      {q:'In a passwordless program, account recovery is:',
+       o:['Unimportant','The likely weak point \u2014 it must be as phishing-resistant as sign-in, or attackers target it','Handled by SMS only','Not needed'],a:1,
+       e:'A weak recovery flow (password/SMS reset) reintroduces phishing risk; recovery must be as strong as the front door.'},
+      {q:'Break-glass accounts exist to:',
+       o:['Give everyone admin','Provide a small number of monitored emergency admin accounts so a misconfig can\u2019t lock out all admins','Replace passkeys','Store passwords'],a:1,
+       e:'Tightly-controlled, monitored emergency accounts prevent a passwordless misconfiguration from locking out administration.'},
+      {q:'When should weak fallback factors (SMS/password) be retired?',
+       o:['Before anyone enrolls','After passwordless is proven for a group \u2014 deliberately, not never and not first','Never','Immediately on day one'],a:1,
+       e:'Retire weak factors once passwordless works for that population; doing it too early causes lockouts, never leaves a phishable gap.'}
+    ]}
   ]}
 ];
 
@@ -5362,6 +5929,143 @@ ${req.requesterHasConflict?'<span style="color:#fbbf24">\u26a0 requester already
     else{out.innerHTML=`<div class="decision deny"><div class="verdict">\u2715 Not granted yet</div><ul class="trace">${r.blockers.map(b=>`<li class="bad">${b}</li>`).join('')}</ul></div>`;}
   };
 }
+
+/* =====================================================================
+   LAB RENDERERS — Part 6 (MDM gate, macOS controls, passwordless, Entra SSO)
+   ===================================================================== */
+
+/* ---- MDM compliance gate: predict compliant/blocked per device ---- */
+function labMdmGate(mount, lab, done){
+  const picks={};
+  const reqs=[lab.policy.requireEnrolled?'MDM-enrolled':'',lab.policy.requireEncryption?'encrypted':'',lab.policy.requireOsMin!=null?('OS \u2265 '+lab.policy.requireOsMin):'',lab.policy.requireScreenLock?'screen lock':'',lab.policy.requireSupervised?'supervised':''].filter(Boolean).join(' \u00b7 ');
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#0078d4"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">${lab.mdm||'Intune'} compliance \u2192 Conditional Access</div><div class="chip">MDM</div></div>
+      <div class="console-body"><div class="mono-out" style="font-size:11.5px">compliance policy requires: ${reqs}</div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">For each device, predict whether the MDM marks it <b>compliant</b> (device-based access allowed) or <b>non-compliant</b> (blocked). All correct to pass.</p>
+    <div id="mdmList"></div>
+    <button class="btn" id="mdmCheck" style="margin-top:12px">Evaluate compliance</button><div class="result" id="mdmRes"></div>`;
+  const L=$('#mdmList',mount);
+  lab.devices.forEach((dv,i)=>{
+    const desc=[dv.platform||'device',dv.enrolled?'enrolled':'unenrolled',dv.encryption?'encrypted':'unencrypted','OS '+dv.osVersion,dv.screenLock?'lock':'no lock',lab.policy.requireSupervised?(dv.supervised?'supervised':'unsupervised'):''].filter(Boolean).join(' \u00b7 ');
+    const row=el(`<div class="quiz-card" style="padding:12px 14px;margin:8px 0"><div style="font-size:13px;margin-bottom:8px"><b>${dv.name}</b> \u2014 <span style="font-family:var(--mono);font-size:11px;color:var(--ink-dim)">${desc}</span></div>
+      <button class="btn ghost sm mdmc" data-i="${i}" data-v="compliant">compliant</button>
+      <button class="btn ghost sm mdmn" data-i="${i}" data-v="block">non-compliant</button>
+      <span class="mdmtag" data-i="${i}" style="font-family:var(--mono);font-size:11px;margin-left:6px"></span></div>`);
+    L.appendChild(row);
+  });
+  $$('.mdmc',mount).forEach(b=>b.onclick=()=>{picks[+b.dataset.i]='compliant';mount.querySelector(`.mdmtag[data-i="${b.dataset.i}"]`).innerHTML='<span style="color:#34d399">compliant</span>';});
+  $$('.mdmn',mount).forEach(b=>b.onclick=()=>{picks[+b.dataset.i]='block';mount.querySelector(`.mdmtag[data-i="${b.dataset.i}"]`).innerHTML='<span style="color:#f87171">non-compliant</span>';});
+  $('#mdmCheck',mount).onclick=()=>{
+    let allRight=true;const rows=[];
+    lab.devices.forEach((dv,i)=>{const r=mdmComplianceCheck(lab.policy,dv);const want=r.compliant?'compliant':'block';const ok=picks[i]===want;if(!ok)allRight=false;
+      rows.push(`<li><span class="mk">${ok?'\u2713':'\u2717'}</span><span>${dv.name}: ${r.compliant?'COMPLIANT':'NON-COMPLIANT'}${r.fails.length?' ('+r.fails[0]+')':''}</span></li>`);});
+    const res=$('#mdmRes',mount);res.className='result show '+(allRight?'pass':'fail');
+    res.innerHTML=`<div class="rv">${allRight?'\u2713 Only compliant devices get through':'\u2717 Re-check the compliance requirements'}</div><ul>${rows.join('')}</ul>`;
+    if(allRight)done();
+  };
+}
+
+/* ---- macOS controls matcher: match capability to the control ---- */
+function labMacControls(mount, lab, done){
+  const picks={};
+  const keys=lab.controlKeys; // subset of MACOS_CONTROLS keys offered
+  const labels={}; keys.forEach(k=>labels[k]=MACOS_CONTROLS[k].label);
+  mount.innerHTML=`
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 10px">${lab.prompt||'Match each macOS security need to the control that provides it.'}</p>
+    <div id="macList"></div>
+    <button class="btn" id="macCheck" style="margin-top:12px">Check mapping</button><div class="result" id="macRes"></div>`;
+  const L=$('#macList',mount);
+  lab.tasks.forEach((t,i)=>{
+    const row=el(`<div class="quiz-card" style="padding:12px 14px;margin:8px 0"><div style="font-size:13px;margin-bottom:8px">${t.task}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${keys.map(k=>`<button class="btn ghost sm macbtn" data-i="${i}" data-c="${k}">${labels[k]}</button>`).join('')}</div>
+      <span class="mactag" data-i="${i}" style="font-family:var(--mono);font-size:11px"></span></div>`);
+    L.appendChild(row);
+  });
+  $$('.macbtn',mount).forEach(b=>b.onclick=()=>{const i=+b.dataset.i;picks[i]=b.dataset.c;
+    mount.querySelectorAll(`.macbtn[data-i="${i}"]`).forEach(x=>{x.style.background='';x.style.borderColor='';});
+    b.style.background='var(--cyan-deep)';b.style.borderColor='var(--cyan)';
+    mount.querySelector(`.mactag[data-i="${i}"]`).innerHTML=' \u2192 '+labels[b.dataset.c];});
+  $('#macCheck',mount).onclick=()=>{
+    let allRight=true;const rows=[];
+    lab.tasks.forEach((t,i)=>{const ok=picks[i]===t.control;if(!ok)allRight=false;
+      rows.push(`<li><span class="mk">${ok?'\u2713':'\u2717'}</span><span>${MACOS_CONTROLS[t.control].label}: ${MACOS_CONTROLS[t.control].role}</span></li>`);});
+    const res=$('#macRes',mount);res.className='result show '+(allRight?'pass':'fail');
+    res.innerHTML=`<div class="rv">${allRight?'\u2713 Correct \u2014 you know the macOS security stack':'\u2717 Some are off \u2014 review which control does what'}</div><ul>${rows.join('')}</ul>`;
+    if(allRight)done();
+  };
+}
+
+/* ---- passwordless classifier: true-passwordless-PR vs not ---- */
+function labPasswordless(mount, lab, done){
+  const picks={};
+  mount.innerHTML=`
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 10px">${lab.prompt||'Tag each authenticator: is it TRUE passwordless AND phishing-resistant, or not?'}</p>
+    <div id="plList"></div>
+    <button class="btn" id="plCheck" style="margin-top:12px">Submit</button><div class="result" id="plRes"></div>`;
+  const L=$('#plList',mount);
+  lab.factors.forEach((key,i)=>{
+    const f=PASSWORDLESS_FACTORS[key];
+    const row=el(`<div class="quiz-card" style="padding:12px 14px;margin:8px 0"><div style="font-size:13px;margin-bottom:8px"><b>${f.label}</b></div>
+      <button class="btn ghost sm pla" data-i="${i}" data-v="yes">passwordless + phishing-resistant</button>
+      <button class="btn ghost sm plb" data-i="${i}" data-v="no">not (has password / phishable)</button>
+      <span class="pltag" data-i="${i}" style="font-family:var(--mono);font-size:11px;margin-left:6px"></span></div>`);
+    L.appendChild(row);
+  });
+  $$('.pla',mount).forEach(b=>b.onclick=()=>{picks[+b.dataset.i]='yes';mount.querySelector(`.pltag[data-i="${b.dataset.i}"]`).innerHTML='<span style="color:#34d399">passwordless + PR</span>';});
+  $$('.plb',mount).forEach(b=>b.onclick=()=>{picks[+b.dataset.i]='no';mount.querySelector(`.pltag[data-i="${b.dataset.i}"]`).innerHTML='<span style="color:#fbbf24">not</span>';});
+  $('#plCheck',mount).onclick=()=>{
+    let allRight=true;const rows=[];
+    lab.factors.forEach((key,i)=>{const want=isTruePasswordlessMFA(key)?'yes':'no';const ok=picks[i]===want;if(!ok)allRight=false;
+      const f=PASSWORDLESS_FACTORS[key];
+      rows.push(`<li><span class="mk">${ok?'\u2713':'\u2717'}</span><span>${f.label}: ${want==='yes'?'TRUE passwordless + phishing-resistant':'NOT'} \u2014 <span style="color:var(--ink-dim)">${f.note}</span></span></li>`);});
+    const res=$('#plRes',mount);res.className='result show '+(allRight?'pass':'fail');
+    res.innerHTML=`<div class="rv">${allRight?'\u2713 You can tell real passwordless from imposters':'\u2717 Some are off \u2014 passwordless AND phishing-resistant is the bar'}</div><ul>${rows.join('')}</ul>`;
+    if(allRight)done();
+  };
+}
+
+/* ---- Entra SSO setup console: toggle the pieces to complete the integration ---- */
+function labEntraSso(mount, lab, done){
+  const app=JSON.parse(JSON.stringify(lab.start));
+  const proto=app.protocol;
+  mount.innerHTML=`
+    <div class="console" style="margin:6px 0 12px"><div class="console-bar"><div class="dots"><i style="background:#0078d4"></i><i style="background:#22d3ee"></i><i style="background:#34d399"></i></div><div class="title">Entra ID \u00b7 enterprise app SSO (${proto.toUpperCase()})</div><div class="chip">SSO</div></div>
+      <div class="console-body"><div id="ssoState" class="mono-out" style="font-size:11.5px;line-height:1.8"></div></div></div>
+    <p style="font-size:13px;color:var(--ink-dim);margin:4px 0 8px">You\u2019re onboarding <b>${lab.appName||'a SaaS app'}</b> for SSO with Entra as the IdP. Configure each required piece, then save.</p>
+    <div class="row" id="ssoCtrls" style="gap:7px;flex-wrap:wrap"></div>
+    <button class="btn" id="ssoCheck" style="margin-top:12px">Save &amp; test SSO</button><div id="ssoOut" style="margin-top:10px"></div><div class="result" id="ssoRes"></div>`;
+  function paint(){
+    const rows = proto==='saml'
+      ? [['Identifier (Entity ID)',app.entityId],['Reply URL (ACS)',app.acsUrl],['SAML signing cert',app.certConfigured?'configured':''],['Attribute/claims',app.claimsMapped?'mapped':''],['Users/groups assigned',app.userAssigned?'assigned':'']]
+      : [['Redirect URI',app.replyUrl],['Scopes/claims',app.claimsMapped?'configured':''],['Client secret/cert',app.certConfigured?'configured':''],['Users/groups assigned',app.userAssigned?'assigned':'']];
+    $('#ssoState',mount).innerHTML=rows.map(([k,v])=>`${k.padEnd(22,' ').replace(/ /g,'\u00a0')}: <span style="color:${v?'#34d399':'#f87171'}">${v?v:'(not set)'}</span>`).join('<br>');
+  }
+  const samlCtrls=[
+    ['entityId','Set Identifier (Entity ID)',()=>{app.entityId='sp:'+(lab.appKey||'app');}],
+    ['acsUrl','Set Reply URL (ACS)',()=>{app.acsUrl='https://'+(lab.appKey||'app')+'/acs';}],
+    ['cert','Configure signing certificate',()=>{app.certConfigured=true;}],
+    ['claims','Map attributes/claims',()=>{app.claimsMapped=true;}],
+    ['assign','Assign users/groups',()=>{app.userAssigned=true;}]
+  ];
+  const oidcCtrls=[
+    ['reply','Set Redirect URI',()=>{app.replyUrl='https://'+(lab.appKey||'app')+'/callback';}],
+    ['claims','Configure scopes/claims',()=>{app.claimsMapped=true;}],
+    ['cert','Add client secret/cert',()=>{app.certConfigured=true;}],
+    ['assign','Assign users/groups',()=>{app.userAssigned=true;}]
+  ];
+  const C=$('#ssoCtrls',mount);
+  (proto==='saml'?samlCtrls:oidcCtrls).forEach(([k,label,fn])=>{
+    const b=el(`<button class="btn ghost sm" data-k="${k}">${label}</button>`);
+    b.onclick=()=>{fn();b.style.background='var(--green-deep)';b.style.borderColor='var(--green)';paint();};C.appendChild(b);});
+  paint();
+  $('#ssoCheck',mount).onclick=()=>{
+    const r=validateEntraSso(app);
+    $('#ssoOut',mount).innerHTML=`<ul class="trace">${r.checks.map(c=>`<li class="${c.ok?'good':'bad'}"><span class="mk">${c.ok?'\u2713':'\u2717'}</span> ${c.label} \u2014 <span style="color:var(--ink-dim)">${c.detail}</span></li>`).join('')}</ul>`;
+    const res=$('#ssoRes',mount);res.className='result show '+(r.ok?'pass':'fail');
+    res.innerHTML=`<div class="rv">${r.ok?'\u2713 '+r.verdict:'\u2717 '+r.verdict}</div>`;
+    if(r.ok)done();
+  };
+}
 /* =====================================================================
    VIEW LAYER — rail, lesson player, labs, quizzes
    ===================================================================== */
@@ -5474,7 +6178,6 @@ function renderCapstone(){
         <a class="btn" href="${CAPSTONE_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">Launch the Northwind Sandbox →</a>
         <button class="btn ghost" id="capBack">Back to curriculum</button>
       </div>
-      <p style="font-size:12.5px;color:var(--ink-dim);margin-top:14px;line-height:1.7">Opens in a new tab. The sandbox is a separate file — if the link doesn't load yet, make sure <code>northwind-sandbox.html</code> is uploaded to your hosting alongside IAM Academy.</p>
     </div>`;
   const cb=$('#capBack');if(cb)cb.onclick=()=>renderHome();
 }
@@ -5642,7 +6345,8 @@ function renderLab(lesson){
     rbac:labRbac,abac:labAbac,jml:labJml,okta:labOkta,sod:labSod,cert:labCert,vault:labVault,pam:labPam,capstone:labCapstone,
     caconsole:labCAConsole,pim:labPIMConsole,accessreview:labAccessReview,ssotriage:labSSOTriage,vaultfleet:labVaultFleet,jit:labJITConsole,
     hrispipeline:labHrisPipeline,attrmap:labAttrMap,assertion:labAssertion,
-    scriptorder:labScriptOrder,rest:labRest,flow:labFlow,certauth:labCertAuth,deviceassurance:labDeviceAssurance,components:labComponents,accessrisk:labAccessRisk,oig:labOIG})[lab.kind](mount,lab,done);
+    scriptorder:labScriptOrder,rest:labRest,flow:labFlow,certauth:labCertAuth,deviceassurance:labDeviceAssurance,components:labComponents,accessrisk:labAccessRisk,oig:labOIG,
+    mdmgate:labMdmGate,maccontrols:labMacControls,passwordless:labPasswordless,entrasso:labEntraSso})[lab.kind](mount,lab,done);
 }
 
 /* -- classify lab (2-way or 3-way buttons) -- */
@@ -5792,6 +6496,26 @@ buildRail();
 addXp(0);             // paint XP bar + level from restored state
 refreshProgressUI();  // paint rail ticks + module-done states from restored state
 renderAbout();        // land on the About page first (recruiter-facing intro)
+// persistent navigation home (available on every screen)
+const _homeLogo=$('#homeLogo'); if(_homeLogo)_homeLogo.onclick=()=>renderHome();
+const _navHome=$('#navHome'); if(_navHome)_navHome.onclick=()=>renderHome();
+// sound toggle
+function paintSoundBtn(){ const b=$('#soundBtn'); if(b){ const on=SOUND.isOn(); b.textContent = on?'♪ Sound on':'♪ Muted'; b.title = on?'Sound on (click to mute)':'Sound muted (click to enable)'; b.setAttribute('aria-pressed', on?'true':'false'); b.classList.toggle('muted',!on); } }
+const _sb=$('#soundBtn'); if(_sb){ paintSoundBtn(); _sb.onclick=()=>{ const on=SOUND.toggle(); paintSoundBtn(); if(on)SOUND.tick(); }; }
+// play a soft error tone when a lab result panel turns to "fail" (centralized, no per-lab edits)
+(function(){
+  const stage=$('#stage'); if(!stage||typeof MutationObserver==='undefined')return;
+  const obs=new MutationObserver(muts=>{
+    for(const mu of muts){
+      const t=mu.target;
+      if(t&&t.classList&&t.classList.contains('result')&&t.classList.contains('fail')&&t.classList.contains('show')){
+        if(t.dataset.snd!=='f'){ t.dataset.snd='f'; try{SOUND.error();}catch(e){} }
+      }
+      if(t&&t.classList&&t.classList.contains('result')&&t.classList.contains('pass')){ t.dataset.snd='p'; }
+    }
+  });
+  obs.observe(stage,{subtree:true,attributes:true,attributeFilter:['class']});
+})();
 
 </script>
 </body>
