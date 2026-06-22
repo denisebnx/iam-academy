@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>IAM Academy by Denise — Learn Identity & Access Engineering</title>
-  <link rel="icon" type="image/png" href="favicon.svg">
 <style>
   /* ============ DESIGN SYSTEM ============
      Identity: an enterprise security console you learn inside of.
@@ -279,6 +278,12 @@
   .about-mod .mod-chev{color:var(--cyan)}
   .about-mod.active-mod{box-shadow:0 0 0 1px var(--cyan) inset}
   .about-mod .mod-head:hover{background:#0c2f38}
+  /* Capstone (Module 14) rail entry */
+  .capstone-mod{margin-top:10px;border:1px solid #143b44;background:linear-gradient(120deg,var(--cyan-deep),transparent 70%);border-radius:11px}
+  .capstone-mod .mod-num{background:var(--cyan-deep);border-color:#0e6b7e;color:var(--cyan)}
+  .capstone-mod .mod-chev{color:var(--cyan);font-size:13px}
+  .capstone-mod.active-mod{box-shadow:0 0 0 1px var(--cyan) inset}
+  .capstone-mod .mod-head:hover{background:#0c2f38}
   /* About page */
   .about-wrap{max-width:760px}
   .about-h1{font-family:var(--disp);font-size:34px;letter-spacing:-.6px;margin:6px 0 20px;line-height:1.08}
@@ -5398,6 +5403,15 @@ function buildRail(){
     }
     r.appendChild(m);
   });
+  // Module 14 — Capstone Sandbox (special non-lesson entry, pinned at the bottom)
+  const cap=el(`<div class="mod capstone-mod" data-mod="CAPSTONE">
+    <div class="mod-head">
+      <div class="mod-num">14</div>
+      <div class="mod-meta"><div class="t">Capstone Sandbox</div><div class="s">Northwind Dynamics · apply it all</div></div>
+      <div class="mod-chev">⎋</div>
+    </div></div>`);
+  cap.querySelector('.mod-head').onclick=()=>renderCapstone();
+  r.appendChild(cap);
   $('#totalCount').textContent=TOTAL_LESSONS;
 }
 
@@ -5432,6 +5446,36 @@ function renderAbout(){
     </div>`;
   const s=$('#aboutStart');if(s)s.onclick=()=>renderHome();
   const rb=$('#aboutResume');if(rb)rb.onclick=()=>{const t=resumeTarget();if(t)openLesson(t.modId,t.lessonId);};
+}
+
+/* ---------- Capstone Sandbox page (Module 14) ---------- */
+const CAPSTONE_URL='https://denisebnx.github.io/Northwind-Dynamics/';
+function renderCapstone(){
+  CURRENT=null;
+  $$('.lesson').forEach(l=>l.classList.remove('active'));
+  $$('.mod').forEach(m=>m.classList.remove('active-mod'));
+  const cm=$('.capstone-mod');if(cm)cm.classList.add('active-mod');
+  $('#stage').scrollTop=0;
+  $('#stageInner').innerHTML=`
+    <div class="about-wrap">
+      <div class="eyebrow">Module 14 · Capstone</div>
+      <h1 class="about-h1">The Northwind Dynamics Sandbox</h1>
+      <div class="about-card">
+        <div class="about-badge" style="background:#0c3a3f;border-color:#11514f;color:#38e1d4">⎋</div>
+        <div class="about-body">
+          <div class="about-name">Apply everything, end to end</div>
+          <div class="about-role">Standalone practice environment</div>
+          <p><b>What it is:</b> You play the new identity engineer at Northwind Dynamics, a fictional 4,000-person company running Okta, Entra ID, CyberArk, and Workday. The home screen is a mission board of 13 challenges — one per IAM Academy discipline — that you can tackle in any order. Each is graded pass/fail with XP and completion tracking, exactly like the Academy labs, and progress saves in your browser.</p>
+          <p>This is where the course stops teaching and starts testing. Every mission drops you into a simulated enterprise tool to do the real job: triage a broken SSO login, process a department transfer, vault a privileged credential, tune Conditional Access, script an off-boarding, audit the directory for risk, and more. Clear all 13 and you've run identity at a company end to end.</p>
+        </div>
+      </div>
+      <div class="about-actions">
+        <a class="btn" href="${CAPSTONE_URL}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">Launch the Northwind Sandbox →</a>
+        <button class="btn ghost" id="capBack">Back to curriculum</button>
+      </div>
+      <p style="font-size:12.5px;color:var(--ink-dim);margin-top:14px;line-height:1.7">Opens in a new tab. The sandbox is a separate file — if the link doesn't load yet, make sure <code>northwind-sandbox.html</code> is uploaded to your hosting alongside IAM Academy.</p>
+    </div>`;
+  const cb=$('#capBack');if(cb)cb.onclick=()=>renderHome();
 }
 
 /* ---------- welcome dashboard ---------- */
