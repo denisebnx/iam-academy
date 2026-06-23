@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>IAM Academy by Denise — Learn Identity & Access Engineering</title>
-  <link rel="icon" type="image/png" href="favicon.svg">
 <style>
   /* ============ DESIGN SYSTEM ============
      Identity: an enterprise security console you learn inside of.
@@ -6496,7 +6495,7 @@ loadState();          // restore saved progress (no-op if none / storage blocked
 buildRail();
 addXp(0);             // paint XP bar + level from restored state
 refreshProgressUI();  // paint rail ticks + module-done states from restored state
-renderAbout();        // land on the About page first (recruiter-facing intro)
+renderHome();        // land on the curriculum dashboard (the main homepage)
 // persistent navigation home (available on every screen)
 const _homeLogo=$('#homeLogo'); if(_homeLogo)_homeLogo.onclick=()=>renderHome();
 const _navHome=$('#navHome'); if(_navHome)_navHome.onclick=()=>renderHome();
